@@ -2378,3 +2378,5 @@ Changelog:
     [else (error "in any-tag, unrecognized type" ty)]
     ))
 
+(define passes
+  `(("uniquify" uniquify interp-Rvar type-check-Rvar)))

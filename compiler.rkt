@@ -54,10 +54,14 @@
   (lambda (e)
     (match e
       [(Var x)
-       (error "TODO: code goes here (uniquify-exp, symbol?)")]
+       (Var (dict-ref env x))]
       [(Int n) (Int n)]
       [(Let x e body)
-       (error "TODO: code goes here (uniquify-exp, let)")]
+       (let* ([x1 (gensym x)]
+              [e1 ((uniquify-exp env) e)]
+              [env1 (dict-set env x x1)]
+              [body1 ((uniquify-exp env1) body)])
+         (Let x1 e1 body1))]
       [(Prim op es)
        (Prim op (for/list ([e es]) ((uniquify-exp env) e)))])))
 
