@@ -14,8 +14,8 @@
 ;; should be named "compiler.rkt"
 (define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
+     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
      ;; Uncomment the following passes as you finish them.
-     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
      ;; ("explicate control" ,explicate-control ,interp-Cvar)
      ;; ("instruction selection" ,select-instructions ,interp-x86-0)
      ;; ("assign homes" ,assign-homes ,interp-x86-0)
