@@ -143,7 +143,7 @@
 (define (remove-complex-opera* p)
   (match p
     [(Program info e)
-     (rco-exp e)]))
+     (Program info (rco-exp e))]))
 
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)
