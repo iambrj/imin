@@ -81,33 +81,27 @@
     [(Int i) (values (Int i) '())]
     [(Var v) (values (Var v) '())]
     [(Prim 'read '())
-     (let ([tmp (gensym 'tmp)])
-       (values tmp
-               `((,tmp . ,(Prim 'read '())))))]
+     (let ([tmp (gensym 'tmp)]) (values tmp `((,tmp . ,(Prim 'read '())))))]
     [(Prim '- `(,e1))
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm atm->subexpr) (rco-atm e1)])
-         (values tmp
-                 (append atm->subexpr `((,tmp . ,(Prim '- `(,atm))))))))]
-    ; XXX : racket doesn't have dict-union (yet) :/, forced to
-    ; exploit dict representation
+         (values tmp (append atm->subexpr `((,tmp . ,(Prim '- `(,atm))))))))]
+         ; XXX : racket doesn't have dict-union (yet) :/, forced to
+         ; exploit dict representation
     [(Prim '+ `(,e1 ,e2))
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
                     [(atm2 atm->subexpr2) (rco-atm e2)])
-         (values tmp
-                 (append atm->subexpr1
-                         atm->subexpr2
-                         `((,tmp . ,(Prim '+ `(,atm1 ,atm2))))))))]
+         (values tmp (append atm->subexpr1
+                             atm->subexpr2
+                             `((,tmp . ,(Prim '+ `(,atm1 ,atm2))))))))]
     [(Let x v b)
      (let ([v (rco-exp v)]
            [b (rco-exp b)])
        (if (atom? b)
-         (values b
-                 `((,x . ,v)))
+         (values b `((,x . ,v)))
          (let ([tmp (gensym 'tmp)])
-           (values tmp
-                   `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
+           (values tmp `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
 
 (define (build-lets var->expr* body)
   (match var->expr*
@@ -119,21 +113,18 @@
   (match e
     [(Int i) (Int i)]
     [(Var v) (Var v)]
-    [(Prim 'read '())
-     (Prim 'read '())]
+    [(Prim 'read '()) (Prim 'read '())]
     [(Prim '- `(,e1))
      (let-values ([(atm atm->expr) (rco-atm e1)])
-       (make-lets atm->expr (if (symbol? atm)
-                              (Prim '- `(,(Var atm)))
-                              (Prim '- `(,e1)))))]
+       (let ([atm (if (symbol? atm) (Var atm) atm)])
+         (make-lets atm->expr (Prim '- `(,atm)))))]
     [(Prim '+ `(,e1 ,e2))
      (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
                   [(atm2 atm->subexpr2) (rco-atm e2)])
        (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
              [atm2 (if (symbol? atm2) (Var atm2) atm2)])
          (make-lets (append atm->subexpr1 atm->subexpr2) (Prim '+ `(,atm1 ,atm2)))))]
-    [(Let x v b)
-     (Let x (rco-exp v) (rco-exp b))]))
+    [(Let x v b) (Let x (rco-exp v) (rco-exp b))]))
 
 ;; remove-complex-opera* : R1 -> R1
 ;; arguments of operations are atomic
