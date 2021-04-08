@@ -70,43 +70,50 @@
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
+(define (atom? e)
+  (match e
+    [(Int i) #t]
+    [(Var v) #t]
+    [else #f]))
 
 (define (rco-atm e)
   (match e
-    [(Int i)
-     (values (Int i)
-             '())]
-    [(Var v)
-     (values (Var v)
-             '())]
+    [(Int i) (values (Int i) '())]
+    [(Var v) (values (Var v) '())]
     [(Prim 'read '())
      (let ([tmp (gensym 'tmp)])
-      (values tmp
-             `((,tmp . ,(Prim 'read '())))))]
+       (values tmp
+               `((,tmp . ,(Prim 'read '())))))]
     [(Prim '- `(,e1))
      (let ([tmp (gensym 'tmp)])
-       (values tmp
-               `((,tmp . ,(Prim '- `(,e1))))))]
+       (let-values ([(atm atm->subexpr) (rco-atm e1)])
+         (values tmp
+                 (append atm->subexpr `((,tmp . ,(Prim '- `(,atm))))))))]
+    ; XXX : racket doesn't have dict-union (yet) :/, forced to
+    ; exploit dict representation
     [(Prim '+ `(,e1 ,e2))
-     (define-values (tmp1 tmp->exp1) (rco-atm e1))
-     (define-values (tmp2 tmp->exp2) (rco-atm e2))
-     (cond
-       [(and (dict-empty? tmp->exp1) (dict-empty? tmp->exp2))
-        (Prim '+ `(,e1 ,e2))]
-       [(and (not (dict-empty? tmp->exp1)) (dict-empty? tmp->exp2))
-        (values (Prim '+ `(,(Var tmp1) ,e2))
-                tmp->exp1)]
-       [(and (dict-empty? tmp->exp1) (not (dict-empty? tmp->exp2)))
-        (values (Prim '+ `(,e1 ,(Var tmp2)))
-                tmp->exp2)]
-       [(and (not (dict-empty? tmp->exp1)) (not (dict-empty? tmp->exp2)))
-        (values (Prim '+ `(,(Var tmp1) ,(Var tmp2)))
-                `((,tmp1 . ,(dict-ref tmp->exp1 tmp1))
-                  (,tmp2 . ,(dict-ref tmp->exp2 tmp2))))])]
-    [(Let x v b)
      (let ([tmp (gensym 'tmp)])
-       (values tmp
-               `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))]))
+       (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
+                    [(atm2 atm->subexpr2) (rco-atm e2)])
+         (values tmp
+                 (append atm->subexpr1
+                         atm->subexpr2
+                         `((,tmp . ,(Prim '+ `(,atm1 ,atm2))))))))]
+    [(Let x v b)
+     (let ([v (rco-exp v)]
+           [b (rco-exp b)])
+       (if (atom? b)
+         (values b
+                 `((,x . ,v)))
+         (let ([tmp (gensym 'tmp)])
+           (values tmp
+                   `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
+
+(define (build-lets var->expr* body)
+  (match var->expr*
+    ['() body]
+    [`((,var . ,expr) . ,d)
+      (Let var expr (make-lets d body))]))
 
 (define (rco-exp e)
   (match e
@@ -115,26 +122,16 @@
     [(Prim 'read '())
      (Prim 'read '())]
     [(Prim '- `(,e1))
-     (define-values (tmp tmp->expr) (rco-atm e1))
-     (if (dict-empty? tmp->expr)
-       (Prim '- `(,e1))
-       (Let tmp (dict-ref tmp->expr tmp) (Prim '- `(,(Var tmp)))))]
+     (let-values ([(atm atm->expr) (rco-atm e1)])
+       (make-lets atm->expr (if (symbol? atm)
+                              (Prim '- `(,(Var atm)))
+                              (Prim '- `(,e1)))))]
     [(Prim '+ `(,e1 ,e2))
-     (define-values (tmp1 tmp->exp1) (rco-atm e1))
-     (define-values (tmp2 tmp->exp2) (rco-atm e2))
-     (cond
-       [(and (dict-empty? tmp->exp1) (dict-empty? tmp->exp2))
-        (Prim '+ `(,e1 ,e2))]
-       [(and (not (dict-empty? tmp->exp1)) (dict-empty? tmp->exp2))
-        (Let tmp1 (dict-ref tmp->exp1 tmp1) (Prim '+ `(,(Var tmp1) ,e2)))]
-       [(and (dict-empty? tmp->exp1) (not (dict-empty? tmp->exp2)))
-        (Let tmp2 (dict-ref tmp->exp2 tmp2) (Prim '+ `(,e1 ,(Var tmp2))))]
-       [(and (not (dict-empty? tmp->exp1)) (not (dict-empty? tmp->exp2)))
-        (Let tmp1
-             (dict-ref tmp->exp1 tmp1)
-             (Let tmp2
-                  (dict-ref tmp->exp2 tmp2)
-                  (Prim '+ `(,(Var tmp1) ,(Var tmp2)))))])]
+     (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
+                  [(atm2 atm->subexpr2) (rco-atm e2)])
+       (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
+             [atm2 (if (symbol? atm2) (Var atm2) atm2)])
+         (make-lets (append atm->subexpr1 atm->subexpr2) (Prim '+ `(,atm1 ,atm2)))))]
     [(Let x v b)
      (Let x (rco-exp v) (rco-exp b))]))
 
