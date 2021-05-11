@@ -133,9 +133,42 @@
     [(Program info e)
      (Program info (rco-exp e))]))
 
+(define (explicate-tail e)
+  (match e
+    [(Var x) (Return (Var x))]
+    [(Int n) (Return (Int n))]
+    [(Let x rhs body)
+     (let ([cont (explicate-tail body)])
+       (explicate-assign rhs x cont))]
+    [(Prim op es)
+     (Return (Prim op es))]
+    [else (error "explicate-tail was passed a non tail expression : " e)]))
+
+(define (merge-conts c1 c2 x)
+  (match c1
+    [(Return v)
+     (Seq (Assign (Var x) v) c2)]
+    [(Seq a tail)
+     (Seq a (merge-conts tail c2 x))]
+    [else (error "Couldn't merge : " c1 c2)]))
+
+(define (explicate-assign e x cont)
+  (match e
+    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
+    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
+    [(Let y rhs body)
+     (let* ([cont1 (explicate-tail body)]
+            [cont (merge-conts cont1 cont x)])
+       (explicate-assign rhs y cont))]
+    [(Prim op es)
+     (Seq (Assign (Var x) e) cont)]
+    [else (error "explicate-tail unhandled case" e)]))
+
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)
-  (error "TODO: code goes here (explicate-control)"))
+  (match p
+    [(Program info body)
+     (let ([tail (explicate-tail body)]) (CProgram '() `((start . ,tail))))]))
 
 ;; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
