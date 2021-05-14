@@ -170,9 +170,65 @@
     [(Program info body)
      (let ([tail (explicate-tail body)]) (CProgram '() `((start . ,tail))))]))
 
-;; select-instructions : C0 -> pseudo-x86
+(define (si-atm e)
+  (match e
+    [(Int n) (Imm n)]
+    [(Var v) (Var v)]
+    [else (error "si-atm passed non-atom expression : " e)]))
+
+(define (si-stmt e)
+  (match e
+    [(Assign (Var v) (Int i)) `(,(Instr 'movq `(,(Imm i) ,(Var v))))]
+    [(Assign (Var v) (Var u)) `(,(Instr 'movq `(,(Var u) ,(Var v))))]
+    [(Assign (Var v) (Prim 'read '()))
+     `(,(Callq `read_int 0)
+       ,(Instr 'movq `(,(Reg 'rax) ,(Var v))))]
+    [(Assign (Var v) (Prim '- `(,a)))
+     (let ([a (si-atm a)])
+       `(,(Instr 'movq `(,a ,(Var v)))
+         ,(Instr 'negq `(,(Var v)))))]
+    [(Assign (Var v) (Prim '+ `(,a1 ,a2)))
+     (let ([a1 (si-atm a1)]
+           [a2 (si-atm a2)])
+       (cond
+         [(equal? (Var v) a1) `(,(Instr 'addq `(,(si-atm a1) ,(Var v))))]
+         [(equal? (Var v) a2) `(,(Instr 'addq `(,(si-atm a2) ,(Var v))))]
+         [else `(,(Instr 'movq `(,a1 ,(Var v))) ,(Instr 'addq `(,a2 ,(Var v))))]))]
+    [else (error "si-stmt passed non-statement expression : " e)]))
+
+(define (si-tail e)
+  (match e
+    [(Return (Var v))  `(,(Instr 'movq `(,(Var v) ,(Reg 'rax))) ,(Jmp 'conclusion))]
+    [(Return (Int i))  `(,(Instr 'movq `(,(Imm i) ,(Reg 'rax))) ,(Jmp 'conclusion))]
+    [(Return (Prim 'read '()))
+     `(,(Callq 'read_int 0)
+       ,(Jmp 'conclusion))]
+    [(Return (Prim '- `(,a)))
+     (let ([a (si-atm a)])
+       `(,(Instr 'movq `(,a ,(Reg 'rax)))
+         ,(Instr 'negq `(,(Reg 'rax)))
+         ,(Jmp 'conclusion)))]
+    [(Return (Prim '+ `(,a1 ,a2)))
+     (let ([a1 (si-atm a1)]
+           [a2 (si-atm a2)])
+       `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
+         ,(Instr 'addq `(,a2 ,(Reg 'rax)))
+         ,(Jmp 'conclusion)))]
+    [(Seq stmt tail)
+     (let ([s (si-stmt stmt)]
+           [t (si-tail tail)])
+       (append s t))]
+    [else (error "si-tail passed non-tail expression : " e)]))
+
+;; select-instructions : C0 -> [pseudo-x86]
 (define (select-instructions p)
-  (error "TODO: code goes here (select-instructions)"))
+  (match p
+    [(CProgram info label-tails)
+     (let* ([label-blocks (map (lambda (label-tail)
+                                 `(,(car label-tail) . ,(Block '() (si-tail (cdr label-tail))))) label-tails)]
+            #;[label-blocks (append label-blocks `((conclusion . ,(Block '() `(,(Instr 'retq '()))))))])
+       (printf "label-blocks : ~s\n" label-blocks)
+       (X86Program info label-blocks))]))
 
 ;; assign-homes : pseudo-x86 -> pseudo-x86
 (define (assign-homes p)
