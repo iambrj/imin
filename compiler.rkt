@@ -237,7 +237,7 @@
                                  `(,(car label-tail) . ,(Block '() (si-tail (cdr label-tail))))) label-tails)])
        (X86Program info label-blocks))]))
 
-(define ((ah-atm var->stk) atm)
+(define ((ah-arg var->stk) atm)
   (match atm
     [(or (Reg _) (Imm _)) atm]
     [(Var v)
@@ -245,14 +245,14 @@
        (if p
          (Deref 'rbp (cdr p))
          (error "var ~s not allocated on stack : ~s\n" v var->stk)))]
-    [else (error "ah-atm passed non-atm expr : " atm)]))
+    [else (error "ah-arg passed non-atm expr : " atm)]))
 
 (define ((ah-instr var->stk) instr)
   (match instr
-    [(Jmp _) instr]
     [(Instr op args)
-     (let ([args (map (ah-atm var->stk) args)])
+     (let ([args (map (ah-arg var->stk) args)])
        (Instr op args))]
+    [_ instr]
     [else (error "ah-instr passed non-instr expression : " instr)]))
 
 (define ((ah-block var->stk) blk)
@@ -310,12 +310,63 @@
                               label-blocks)])
        (X86Program info label-blocks))]))
 
+(define (print-x86-arg arg)
+  (match arg
+    [(Imm i) (string-append "$" (number->string i))]
+    [(Reg r) (string-append "%" (symbol->string r))]
+    [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
+    [else (error "print-x86-arg passed non-arg expr : " arg)]))
+
+(define (print-x86-args args)
+  (match args
+    [`(,a) (print-x86-arg a)]
+    [`(,a1 ,a2)
+      (string-append (print-x86-arg a1) ", " (print-x86-arg a2))]))
+
+(define (print-x86-instr instr)
+  (match instr
+    [(Instr op args)
+     (string-append (symbol->string op) " "
+                    (print-x86-args args))]
+    [(Callq l i) (symbol->string l)]
+    [(Retq) "retq"]
+    [(Jmp l) (string-append "jmp " (symbol->string l) "\n")]))
+
+(define (print-x86-block blk)
+  (match blk
+    [(Block info instrs)
+     (foldr (lambda (instr acc)
+              (string-append "\t" (print-x86-instr instr) "\n" acc))
+            ""
+            instrs)]
+    [_ (error "print-x86-block passed non block value : " blk)]))
+
 ;; print-x86 : x86 -> string
 (define (print-x86 p)
-  (error "TODO: code goes here (print-x86)"))
-
-(list (Instr 'movq (list (Imm 42) (Deref 'rbp -8)))
-      (list (Instr 'movq (list (Deref 'rbp -8) (Reg 'rax)))
-            (Instr 'movq (list (Reg 'rax) (Deref 'rbp -16))))
-      (Instr 'movq (list (Deref 'rbp -16) (Reg 'rax)))
-      (Jmp 'conclusion))
+  (match p
+    [(X86Program info label-blocks)
+     (let* ([stack-space (assv 'stack-space info)]
+            [stack-space (if stack-space
+                           (cdr stack-space)
+                           0)]
+            [main
+              (string-append "main:\n"
+                             "\tpushq %rbp\n"
+                             "\tmovq %rsp, %rbp\n"
+                             "\tsubq $" (number->string stack-space) ", %rsp\n"
+                             "\tjmp start\n")]
+            [conclusion
+              (string-append "conclusion:\n"
+                             "\taddq $" (number->string stack-space) ", %rsp\n"
+                             "\tpopq %rbp\n"
+                             "\tretq\n")]
+            [label-blocks (foldl (lambda (label-block acc)
+                                   (string-append (symbol->string (car label-block)) ":\n"
+                                                  (print-x86-block (cdr label-block))
+                                                  (if (equal? (car label-block) 'start)
+                                                    "\t.globl main\n"
+                                                    "")
+                                                  acc))
+                                 ""
+                                 label-blocks)])
+       (string-append label-blocks main conclusion))]))
