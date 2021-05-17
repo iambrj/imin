@@ -5,26 +5,12 @@
 (require "utilities.rkt")
 (provide (all-defined-out))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Rint examples
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define framesize 16)
 
-;; The following compiler pass is just a silly one that doesn't change
-;; anything important, but is nevertheless an example of a pass. It
-;; flips the arguments of +. -Jeremy
-(define (flip-exp e)
-  (match e
-    [(Var x) e]
-    [(Prim 'read '()) (Prim 'read '())]
-    [(Prim '- (list e1)) (Prim '- (list (flip-exp e1)))]
-    [(Prim '+ (list e1 e2)) (Prim '+ (list (flip-exp e2) (flip-exp e1)))]))
+(define (round-frame i)
+  (* 16 (exact-ceiling (/ i 16.))))
 
-(define (flip-Rint e)
-  (match e
-    [(Program info e) (Program info (flip-exp e))]))
-
-
-;; Next we have the partial evaluation pass described in the book.
+;; Partial evaluation pass described in the book.
 (define (pe-neg r)
   (match r
     [(Int n) (Int (fx- 0 n))]
@@ -133,17 +119,6 @@
     [(Program info e)
      (Program info (rco-exp e))]))
 
-(define (explicate-tail e)
-  (match e
-    [(Var x) (Return (Var x))]
-    [(Int n) (Return (Int n))]
-    [(Let x rhs body)
-     (let ([cont (explicate-tail body)])
-       (explicate-assign rhs x cont))]
-    [(Prim op es)
-     (Return (Prim op es))]
-    [else (error "explicate-tail was passed a non tail expression : " e)]))
-
 (define (merge-conts c1 c2 x)
   (match c1
     [(Return v)
@@ -152,23 +127,57 @@
      (Seq a (merge-conts tail c2 x))]
     [else (error "Couldn't merge : " c1 c2)]))
 
-(define (explicate-assign e x cont)
+(define (explicate-tail e vars)
   (match e
-    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
-    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
-    [(Let y rhs body)
-     (let* ([cont1 (explicate-tail body)]
-            [cont (merge-conts cont1 cont x)])
-       (explicate-assign rhs y cont))]
+    [(Var x)
+     (let ([vars (if (not (member x vars))
+                   (cons x vars)
+                   vars)])
+       (values vars
+               (Return (Var x))))]
+    [(Int n)
+     (values vars
+             (Return (Int n)))]
+    [(Let x rhs body)
+     (let*-values ([(vars cont) (explicate-tail body vars)]
+                   [(vars) (if (not (member x vars))
+                             (cons x vars)
+                             vars)])
+       (explicate-assign rhs x cont vars))]
     [(Prim op es)
-     (Seq (Assign (Var x) e) cont)]
+     (values vars
+             (Return (Prim op es)))]
+    [else (error "explicate-tail was passed a non tail expression : " e)]))
+
+(define (explicate-assign e x cont vars)
+  (match e
+    [(Var y)
+     (let ([vars (if (not (member y vars))
+                   (cons y vars)
+                   vars)])
+       (values vars
+               (Seq (Assign (Var x) (Var y)) cont)))]
+    [(Int n)
+     (values vars
+             (Seq (Assign (Var x) (Int n)) cont))]
+    [(Let y rhs body)
+     (let*-values ([(vars cont1) (explicate-tail body vars)]
+                   [(cont) (merge-conts cont1 cont x)]
+                   [(vars) (if (not (member y vars))
+                           (cons y vars)
+                           vars)])
+       (explicate-assign rhs y cont vars))]
+    [(Prim op es)
+     (values vars
+             (Seq (Assign (Var x) e) cont))]
     [else (error "explicate-tail unhandled case" e)]))
 
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)
   (match p
     [(Program info body)
-     (let ([tail (explicate-tail body)]) (CProgram '() `((start . ,tail))))]))
+     (let-values ([(vars tail) (explicate-tail body '())])
+       (CProgram `((locals . ,vars)) `((start . ,tail))))]))
 
 (define (si-atm e)
   (match e
@@ -220,19 +229,57 @@
        (append s t))]
     [else (error "si-tail passed non-tail expression : " e)]))
 
-;; select-instructions : C0 -> [pseudo-x86]
+;; select-instructions : c0 -> [pseudo-x86]
 (define (select-instructions p)
   (match p
     [(CProgram info label-tails)
      (let* ([label-blocks (map (lambda (label-tail)
-                                 `(,(car label-tail) . ,(Block '() (si-tail (cdr label-tail))))) label-tails)]
-            #;[label-blocks (append label-blocks `((conclusion . ,(Block '() `(,(Instr 'retq '()))))))])
-       (printf "label-blocks : ~s\n" label-blocks)
+                                 `(,(car label-tail) . ,(Block '() (si-tail (cdr label-tail))))) label-tails)])
        (X86Program info label-blocks))]))
+
+(define ((ah-atm var->stk) atm)
+  (match atm
+    [(or (Reg _) (Imm _)) atm]
+    [(Var v)
+     (let ([p (assv v var->stk)])
+       (if p
+         (Deref 'rbp (cdr p))
+         (error "var ~s not allocated on stack : ~s\n" v var->stk)))]
+    [else (error "ah-atm passed non-atm expr : " atm)]))
+
+(define ((ah-instr var->stk) instr)
+  (match instr
+    [(Jmp _) instr]
+    [(Instr op args)
+     (let ([args (map (ah-atm var->stk) args)])
+       (Instr op args))]
+    [else (error "ah-instr passed non-instr expression : " instr)]))
+
+(define ((ah-block var->stk) blk)
+  (match blk
+    [(Block info instrs)
+     (let ([instrs (map (ah-instr var->stk) instrs)])
+       (Block info instrs))]))
 
 ;; assign-homes : pseudo-x86 -> pseudo-x86
 (define (assign-homes p)
-  (error "TODO: code goes here (assign-homes)"))
+  (match p
+    [(X86Program info label-blocks)
+     (let* ([locals (assv 'locals info)]
+            [locals (if locals
+                      (cdr locals)
+                      '())]
+            [var->stk (foldr (lambda (var acc)
+                               (cons `(,var . ,(* -8 (+ 1 (index-of locals var)))) acc))
+                             '()
+                             locals)]
+            [label-blocks (map (lambda (label-block)
+                                 (cons (car label-block) ((ah-block var->stk) (cdr label-block))))
+                               label-blocks)]
+            [stack-space (if (empty? var->stk)
+                           0
+                           (round-frame (- (cdr (last var->stk)))))])
+       (X86Program (cons`(stack-space . ,stack-space) info) label-blocks))]))
 
 ;; patch-instructions : psuedo-x86 -> x86
 (define (patch-instructions p)
