@@ -281,10 +281,41 @@
                            (round-frame (- (cdr (last var->stk)))))])
        (X86Program (cons`(stack-space . ,stack-space) info) label-blocks))]))
 
+(define (pi-instr instr)
+  (match instr
+    [(Instr op args)
+     (match args
+       [`(,(Deref 'rbp x) ,(Deref 'rbp y))
+        `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
+          ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
+       [_ `(,instr)])]
+    [_ `(,instr)]))
+
+(define (pi-block blk)
+  (match blk
+    [(Block info instrs)
+     (let ([instrs (foldl (lambda (instr acc)
+                            (append acc (pi-instr instr)))
+                          '()
+                          instrs)])
+       (Block info instrs))]))
+
 ;; patch-instructions : psuedo-x86 -> x86
 (define (patch-instructions p)
-  (error "TODO: code goes here (patch-instructions)"))
+  (match p
+    [(X86Program info label-blocks)
+     (let ([label-blocks (map (lambda (label-block)
+                                (cons (car label-block)
+                                      (pi-block (cdr label-block))))
+                              label-blocks)])
+       (X86Program info label-blocks))]))
 
 ;; print-x86 : x86 -> string
 (define (print-x86 p)
   (error "TODO: code goes here (print-x86)"))
+
+(list (Instr 'movq (list (Imm 42) (Deref 'rbp -8)))
+      (list (Instr 'movq (list (Deref 'rbp -8) (Reg 'rax)))
+            (Instr 'movq (list (Reg 'rax) (Deref 'rbp -16))))
+      (Instr 'movq (list (Deref 'rbp -16) (Reg 'rax)))
+      (Jmp 'conclusion))
