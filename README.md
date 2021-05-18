@@ -10,7 +10,40 @@ A compiler for (a subset of) Racket -> x86-64, written in Racket
 - [Original ICFP pearl on nanopass compilers](https://legacy.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf)
 - [Intel x86 Manual](http://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-manual-325462.pdf?_ga=1.200286509.2020252148.1452195021)
 
-## Misc
+## Debugging assembly with gdb
+
+1. Compile the `.s` file with `-g` to generate debugging symbols, e.g.
+```
+  gcc -g var_test_11.s
+```
+2. Load the `.out` file into gdb
+```
+  gdb var_test_11.out
+```
+3. Set break points by passing addresses via `<label> + <offset>`, e.g.
+```
+  (gdb) info break
+  No breakpoints or watchpoints.
+  (gdb) break *main+2
+  Breakpoint 1 at 0x1124: file var_test_11.s, line 8.
+```
+4. Use `run` to step through the program, stopping at each break point and
+   `cont` to continue till the next breakpoint. Use `info registers` to inspect
+   register contents, `print/<bxd> <reg>` to print contents of register `<reg>`
+   in binary/hex/decimal, e.g.
+   ```
+     (gdb) print/d $rax
+   ```
+   prints the contents of register `rax` in decimal
+5. Use `info frame` to show stack frame info and `x/<offset><bxd><bhwg> <addr>`
+   to examine contents at that address. E.g.
+   ```
+     (gdb) x/4xw $sp
+   ```
+   prints "four words (`w`) of memory above the stack pointer (here, `$sp`) in
+   hexadecimal (`x`)".
+
+## Using the runtime for IO
 
 The `runtime.c` file needs to be compiled and linked with the assembly
 code that the compiler produces. To compile `runtime.c`, do the
@@ -29,3 +62,4 @@ an executable program, do
   gcc -g runtime.o foo.s
 ```
 which will produce the executable program named a.out.
+
