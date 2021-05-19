@@ -2,13 +2,35 @@
 
 A compiler for (a subset of) Racket -> x86-64, written in Racket
 
-
 ## Resources
 
 - [x86-64 for the compiler writer](http://web.cecs.pdx.edu/~apt/cs491/x86-64.pdf)
 - [Indiana University compiler course](https://iucompilercourse.github.io/IU-P423-P523-E313-E513-Fall-2020/)
 - [Original ICFP pearl on nanopass compilers](https://legacy.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf)
 - [Intel x86 Manual](http://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-manual-325462.pdf?_ga=1.200286509.2020252148.1452195021)
+
+## Adding compiler tests
+
+1. Add a `.rkt` test file in `/tests`, e.g.
+```
+; /tests/var_test_12.rkt
+(let ([x (read)])
+  (+ x 2))
+```
+2. Add a `.in` file containing inputs to all the `read` calls, e.g.
+```
+; /tests/var_test_12.in
+3
+```
+3. Add a `.res` file containingt the expected output, e.g.
+```
+; /test/var_test_12.res
+5
+```
+4. Run tests
+```
+racket run-tests.rkt
+```
 
 ## Debugging assembly with gdb
 
