@@ -2101,7 +2101,7 @@ Added structs for AST nodes.
                                                (call-with-input-file
                                                  (format "tests/~a.res" test-name)
                                                  (lambda (f) (read-line f)))
-                                               "42")]
+                                               (error "Expected result file missng for test : " test-name))]
                                      [error-expected (file-exists? (format "tests/~a.err" test-name))])
                                  (let* ([command (format "./tests/~a.out ~a" test-name input)]
                                         [result (get-value-or-fail command output)])
