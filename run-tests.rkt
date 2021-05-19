@@ -14,14 +14,14 @@
 ;; should be named "compiler.rkt"
 (define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
-     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
-     ("explicate control" ,explicate-control ,interp-Cvar)
-     ("instruction selection" ,select-instructions ,interp-x86-0)
-     ("assign homes" ,assign-homes ,interp-x86-0)
-     ("patch instructions" ,patch-instructions ,interp-x86-0)
-     ;; Uncomment the following passes as you finish them.
-     ;; ("print x86" ,print-x86 #f)
-     ))
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
+    ("explicate control" ,explicate-control ,interp-Cvar)
+    ("instruction selection" ,select-instructions ,interp-x86-0)
+    ("assign homes" ,assign-homes ,interp-x86-0)
+    ("patch instructions" ,patch-instructions ,interp-x86-0)
+    ("print x86" ,print-x86 #f)
+    ;; Uncomment the following passes as you finish them.
+    ))
 
 ;; all the files in the tests/ directory with extension ".rkt".
 (define all-tests
@@ -34,14 +34,13 @@
   (map (lambda (p)
          (caddr (string-split p "_")))
        (filter
-        (lambda (p)
-          (string=? r (car (string-split p "_"))))
-        all-tests)))
+         (lambda (p)
+           (string=? r (car (string-split p "_"))))
+         all-tests)))
 
 (debug-level 1)
 (interp-tests "var" #f passes interp-Rvar "var_test" (tests-for "var"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-;; (compiler-tests "var" #f passes "var_test" (tests-for "var"))
-
+(compiler-tests "var" #f passes "var_test" (tests-for "var"))
