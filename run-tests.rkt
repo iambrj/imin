@@ -17,6 +17,7 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
     ("explicate control" ,explicate-control ,interp-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
+    ("uncover-live" ,uncover-live ,interp-x86-0)
     ("assign homes" ,assign-homes ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
     ("print x86" ,print-x86 #f)
@@ -43,4 +44,4 @@
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-(compiler-tests "var" #f passes "var_test" (tests-for "var"))
+;; (compiler-tests "var" #f passes "var_test" (tests-for "var"))
