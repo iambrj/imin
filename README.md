@@ -65,6 +65,10 @@ racket run-tests.rkt
    prints "four words (`w`) of memory above the stack pointer (here, `$sp`) in
    hexadecimal (`x`)".
 
+## Editing `run-tests.rkt`
+
+- The `passes` variable ins `run-tests.rkt` runs the passes *in the very order*.
+
 ## Using the runtime for IO
 
 The `runtime.c` file needs to be compiled and linked with the assembly
