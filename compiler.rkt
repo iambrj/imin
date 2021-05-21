@@ -10,6 +10,10 @@
 (define (round-frame i)
   (* 16 (exact-ceiling (/ i 16.))))
 
+(define caller-saved '(rax rcx rdx rsi rdi r8 r9 r10 r11))
+(define callee-saved '(rsp rbp rbx r12 r13 r14 r15))
+(define arg-regs (list->set '(rdi rsi rdx rcx r8 r9)))
+
 ;; Partial evaluation pass described in the book.
 (define (pe-neg r)
   (match r
@@ -32,9 +36,8 @@
   (match p
     [(Program info e) (Program info (pe-exp e))]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; HW1 Passes
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; uniquify-exp -> remove-complex-opera* -> explicate-control ->
+; select-instructions -> assign-homes -> patch-instructions -> print x86
 
 (define (uniquify-exp env)
   (lambda (e)
@@ -72,8 +75,8 @@
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm atm->subexpr) (rco-atm e1)])
          (values tmp (append atm->subexpr `((,tmp . ,(Prim '- `(,atm))))))))]
-         ; XXX : racket doesn't have dict-union (yet) :/, forced to
-         ; exploit dict representation
+    ; XXX : racket doesn't have dict-union (yet) :/, forced to
+    ; exploit dict representation
     [(Prim '+ `(,e1 ,e2))
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
@@ -164,8 +167,8 @@
      (let*-values ([(vars cont1) (explicate-tail body vars)]
                    [(cont) (merge-conts cont1 cont x)]
                    [(vars) (if (not (member y vars))
-                           (cons y vars)
-                           vars)])
+                             (cons y vars)
+                             vars)])
        (explicate-assign rhs y cont vars))]
     [(Prim op es)
      (values vars
@@ -191,11 +194,11 @@
     [(Assign (Var v) (Var u)) `(,(Instr 'movq `(,(Var u) ,(Var v))))]
     [(Assign (Var v) (Prim 'read '()))
      `(,(Callq `read_int 0)
-       ,(Instr 'movq `(,(Reg 'rax) ,(Var v))))]
+        ,(Instr 'movq `(,(Reg 'rax) ,(Var v))))]
     [(Assign (Var v) (Prim '- `(,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,a ,(Var v)))
-         ,(Instr 'negq `(,(Var v)))))]
+          ,(Instr 'negq `(,(Var v)))))]
     [(Assign (Var v) (Prim '+ `(,a1 ,a2)))
      (let ([a1 (si-atm a1)]
            [a2 (si-atm a2)])
@@ -211,18 +214,18 @@
     [(Return (Int i))  `(,(Instr 'movq `(,(Imm i) ,(Reg 'rax))) ,(Jmp 'conclusion))]
     [(Return (Prim 'read '()))
      `(,(Callq 'read_int 0)
-       ,(Jmp 'conclusion))]
+        ,(Jmp 'conclusion))]
     [(Return (Prim '- `(,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,a ,(Reg 'rax)))
-         ,(Instr 'negq `(,(Reg 'rax)))
-         ,(Jmp 'conclusion)))]
+          ,(Instr 'negq `(,(Reg 'rax)))
+          ,(Jmp 'conclusion)))]
     [(Return (Prim '+ `(,a1 ,a2)))
      (let ([a1 (si-atm a1)]
            [a2 (si-atm a2)])
        `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
-         ,(Instr 'addq `(,a2 ,(Reg 'rax)))
-         ,(Jmp 'conclusion)))]
+          ,(Instr 'addq `(,a2 ,(Reg 'rax)))
+          ,(Jmp 'conclusion)))]
     [(Seq stmt tail)
      (let ([s (si-stmt stmt)]
            [t (si-tail tail)])
@@ -286,8 +289,8 @@
     [(Instr op args)
      (match args
        [`(,(Deref 'rbp x) ,(Deref 'rbp y))
-        `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
-          ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
+         `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
+            ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
        [_ `(,instr)])]
     [_ `(,instr)]))
 
@@ -370,3 +373,53 @@
                                  ""
                                  label-blocks)])
        (string-append label-blocks main conclusion))]))
+
+(define (instr-w instr)
+  (match instr
+    [(Instr _ `(,_ ,a2)) (ul-arg a2)]
+    [(Instr 'negq `(,arg)) (ul-arg arg)]
+    [(Callq _ _) (list->set caller-saved)]
+    [else (set)]))
+
+(define (instr-r instr)
+  (match instr
+    [(Instr (or 'addq 'subq) `(,a1 ,a2)) (set-union (ul-arg a1) (ul-arg a2))]
+    [(Instr 'movq `(,a1 ,_)) (ul-arg a1)]
+    [(Instr 'negq `(,arg)) (ul-arg arg)]
+    [(Callq _ i) (list->set (take callee-saved i))]
+    [else (set)]))
+
+(define (ul-arg a)
+  (match a
+    [(or (Var _) (Reg _)) (set a)]
+    [_ (set)]))
+
+; Lafter(k) = Lafter(k + 1) - W(k) U R(k)
+(define (ul-instrs instrs after label->live)
+  (match instrs
+    ['() (values after label->live)]
+    [`(,(Jmp label) . ,t)
+      ; what if there is a jmp to a label from two different blocks?
+      (ul-instrs t after (dict-set label->live label after))]
+    [`(,i . ,t)
+      (let ([w (instr-w i)]
+            [r (instr-r i)]
+            [a (car after)])
+        (ul-instrs t (cons (set-union (set-subtract a w) r) after) label->live))]))
+
+(define (ul-block blk)
+  (match blk
+    [(Block info instrs)
+     (let*-values ([(r) (reverse instrs)]
+                   [(live-after label->live) (ul-instrs r `(,(set)) '())])
+       (Block (dict-set* info 'live-after live-after 'label->live label->live)
+              instrs))]))
+
+(define (uncover-live p)
+  (match p
+    [(X86Program info label-blocks)
+     (let ([label-blocks (map (lambda (label-block)
+                                (cons (car label-block)
+                                      (ul-block (cdr label-block))))
+                              label-blocks)])
+       (X86Program info label-blocks))]))
