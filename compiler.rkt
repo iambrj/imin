@@ -1,8 +1,10 @@
 #lang racket
-(require racket/set racket/stream)
-(require racket/fixnum)
-(require "interp-Rint.rkt")
-(require "utilities.rkt")
+(require racket/set
+         racket/stream
+         racket/fixnum
+         "interp-Rint.rkt"
+         "utilities.rkt"
+         graph)
 (provide (all-defined-out))
 
 (define framesize 16)
@@ -432,17 +434,63 @@
                               label-blocks)])
        (X86Program info label-blocks))]))
 
-#;(define (bi-block blk live-after)
+(define (bi-instr instr live-after g)
+  (match instr
+    [(Instr 'movq `(,s ,d))
+     (let ([_ (map (lambda (v)
+                     (if (or (equal? v d) (equal? v s))
+                       (void)
+                       (add-edge! g d v)))
+                   (set->list live-after))])
+       g)]
+    [else (let* ([w (instr-w instr)]
+                 [_ (for* ([d w]
+                           [v live-after])
+                      (if (equal? v d)
+                        (void)
+                        (add-edge! g d v)))])
+            g)]))
+
+(define (bi-block blk)
   (match blk
     [(Block info instrs)
-     ()]))
+     (let* ([live-after (dict-ref info 'live-after)]
+            [vertices (apply set-union live-after)]
+            [g (undirected-graph '())]
+            [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
+            [_ (for ([i instrs] [la live-after]) (bi-instr i la g))])
+       (Block (dict-set info 'conflicts g) instrs))]))
 
-#;(define (build-interference p)
+(define (build-interference p)
   (match p
     [(X86Program info label-blocks)
      (let ([label-blocks (map (lambda (label-block)
                                 (cons (car label-block)
                                       (bi-block (cdr label-block))))
-                              label-blocks)]
-           [live-after (dict-ref info 'live-after)])
+                              label-blocks)])
        (X86Program info label-blocks))]))
+#|
+(define b
+  (Block '()
+         `(,(Instr 'movq `(,(Imm 1) ,(Var 'v)))
+            ,(Instr 'movq `(,(Imm 42) ,(Var 'w)))
+            ,(Instr 'movq `(,(Var 'v) ,(Var 'x)))
+            ,(Instr 'addq `(,(Imm 7) ,(Var 'x)))
+            ,(Instr 'movq `(,(Var 'x) ,(Var 'y)))
+            ,(Instr 'movq `(,(Var 'x) ,(Var 'z)))
+            ,(Instr 'addq `(,(Var 'w) ,(Var 'z)))
+            ,(Instr 'movq `(,(Var 'y) ,(Var 't)))
+            ,(Instr 'negq `(,(Var 't)))
+            ,(Instr 'movq `(,(Var 'z) ,(Reg 'rax)))
+            ,(Instr 'movq `(,(Var 't) ,(Reg 'rax)))
+            ,(Jmp 'conclusion))))
+
+(define g
+  (let ([b (bi-block (ul-block b))])
+    (match b
+      [(Block info instrs)
+       (dict-ref info 'conflicts)])))
+
+(printf "Vertices : ~s\n" (get-vertices g))
+(printf "Edges : ~s\n" (get-edges g))
+|#
