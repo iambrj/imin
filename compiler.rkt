@@ -344,6 +344,19 @@
             instrs)]
     [_ (error "print-x86-block passed non block value : " blk)]))
 
+(define (print-main-block stack-space)
+  (string-append "main:\n"
+                 "\tpushq %rbp\n"
+                 "\tmovq %rsp, %rbp\n"
+                 "\tsubq $" (number->string stack-space) ", %rsp\n"
+                 "\tjmp start\n"))
+
+(define (print-conclusion-block stack-space)
+  (string-append "conclusion:\n"
+                 "\taddq $" (number->string stack-space) ", %rsp\n"
+                 "\tpopq %rbp\n"
+                 "\tretq\n"))
+
 ;; print-x86 : x86 -> string
 (define (print-x86 p)
   (match p
@@ -352,17 +365,8 @@
             [stack-space (if stack-space
                            (cdr stack-space)
                            0)]
-            [main
-              (string-append "main:\n"
-                             "\tpushq %rbp\n"
-                             "\tmovq %rsp, %rbp\n"
-                             "\tsubq $" (number->string stack-space) ", %rsp\n"
-                             "\tjmp start\n")]
-            [conclusion
-              (string-append "conclusion:\n"
-                             "\taddq $" (number->string stack-space) ", %rsp\n"
-                             "\tpopq %rbp\n"
-                             "\tretq\n")]
+            [main (print-main-block stack-space)]
+            [conclusion (print-conclusion-block stack-space)]
             [label-blocks (foldl (lambda (label-block acc)
                                    (string-append (symbol->string (car label-block)) ":\n"
                                                   (print-x86-block (cdr label-block))
@@ -397,10 +401,12 @@
 ; Lafter(k) = Lafter(k + 1) - W(k) U R(k)
 (define (ul-instrs instrs after label->live)
   (match instrs
-    ['() (values after label->live)]
+    ['() after]
     [`(,(Jmp label) . ,t)
-      ; what if there is a jmp to a label from two different blocks?
-      (ul-instrs t after (dict-set label->live label after))]
+      (let ([a (if (dict-has-key? label->live label)
+                 (dict-ref label->live label)
+                 (set))])
+        (ul-instrs t (cons (set-union a (car after)) after) label->live))]
     [`(,i . ,t)
       (let ([w (instr-w i)]
             [r (instr-r i)]
@@ -410,9 +416,11 @@
 (define (ul-block blk)
   (match blk
     [(Block info instrs)
-     (let*-values ([(r) (reverse instrs)]
-                   [(live-after label->live) (ul-instrs r `(,(set)) '())])
-       (Block (dict-set* info 'live-after live-after 'label->live label->live)
+     (let* ([r (reverse instrs)]
+            ; XXX : ugly hardcoded label->live
+            [live-after
+              (ul-instrs r `(,(set)) `((conclusion . ,(set (Reg 'rax) (Reg 'rsp)))))])
+       (Block (dict-set* info 'live-after live-after 'label->live `((conclusion . ,(set 'rax 'rsp))))
               instrs))]))
 
 (define (uncover-live p)
@@ -422,4 +430,19 @@
                                 (cons (car label-block)
                                       (ul-block (cdr label-block))))
                               label-blocks)])
+       (X86Program info label-blocks))]))
+
+#;(define (bi-block blk live-after)
+  (match blk
+    [(Block info instrs)
+     ()]))
+
+#;(define (build-interference p)
+  (match p
+    [(X86Program info label-blocks)
+     (let ([label-blocks (map (lambda (label-block)
+                                (cons (car label-block)
+                                      (bi-block (cdr label-block))))
+                              label-blocks)]
+           [live-after (dict-ref info 'live-after)])
        (X86Program info label-blocks))]))
