@@ -1,6 +1,6 @@
 #lang racket
 (require "heap.rkt")
-(provide make-pqueue pqueue-push! pqueue-pop! pqueue-decrease-key! pqueue-count
+(provide make-pqueue pqueue-push! pqueue-min pqueue-pop! pqueue-decrease-key! pqueue-count
 	 set-node-key! node-key)
 
 ;; priority queue (smallest priority first)
@@ -29,6 +29,9 @@
   (let ([ret (heap-min q)])
     (heap-remove-min! q)
     (node-key ret)))
+
+(define (pqueue-min q)
+  (heap-min q))
 
 (define (pqueue-decrease-key! q node)
   (heap-decrease-key q (node-index node)))
