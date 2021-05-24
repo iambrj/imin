@@ -436,6 +436,7 @@
                               label-blocks)])
        (X86Program info label-blocks))]))
 
+; XXX : Callq not handled! Need to take care of caller saved variables
 (define (bi-instr instr live-after g)
   (match instr
     [(Instr 'movq `(,s ,d))
@@ -488,28 +489,30 @@
       0
       (min-free-list l))))
 
-(define (update-neighbors vertex->color color neighbors)
+(define (update-neighbors! vertex->satur color neighbors)
   (match neighbors
-    [`() vertex->color]
+    [`() vertex->satur]
     [`(,n . ,d)
-      (let* ([s (dict-ref vertex->color n)]
-             [vertex->color (dict-set vertex->color n (set-union s (set color)))])
-        (update-neighbors vertex->color color d))]))
+      (let* ([s (dict-ref vertex->satur n)]
+             [_ (dict-set! vertex->satur n (set-union s (set color)))])
+        (update-neighbors! vertex->satur color d))]))
 
-(define (color-graph g q w vertex->satur [vertex->color '()])
+(define (color-graph g q w vertex->satur vertex->node [vertex->color '()])
   (match w
     ['() vertex->color]
-    [else (let* ([v (car (pqueue-pop! q))]
+    [else (let* ([v (pqueue-pop! q)]
                  [w (set-remove w v)]
                  [satur (dict-ref vertex->satur v)]
                  [color (min-free satur)]
                  [neighbors (filter Var? (get-neighbors g v))]
                  [_ (foldr (lambda (x a)
-                             (pqueue-decrease-key! q (cons x (set-count (dict-ref vertex->satur x)))))
+                             (pqueue-decrease-key! q (dict-ref vertex->node x)))
                            '()
-                           (set->list w))]
-                 [vertex->satur (update-neighbors vertex->satur color neighbors)])
-            (color-graph g q w vertex->satur vertex->color))]))
+                           neighbors)]
+                 [vertex->satur (update-neighbors! vertex->satur color neighbors)])
+            (color-graph g q w vertex->satur vertex->node `((,v . ,color) . ,vertex->color)))]))
+
+#|
 (define b
   (Block '()
          `(,(Instr 'movq `(,(Imm 1) ,(Var 'v)))
@@ -525,7 +528,6 @@
             ,(Instr 'movq `(,(Var 't) ,(Reg 'rax)))
             ,(Jmp 'conclusion))))
 
-#|
 (define g
   (let ([b (bi-block (ul-block b))])
     (match b
@@ -534,25 +536,16 @@
 
 (define w (filter Var? (get-vertices g)))
 
-(define q
-  (let ([q (make-pqueue (lambda (x1 x2)
-                          (> (cdr x1) (cdr x2))))])
-    (begin (foldr
-             (lambda (x a)
-               (pqueue-push! q (cons x 0)))
-             q
-             w)
-           q)))
-
 (define v->s
-  (foldr (lambda (x a)
-           `((,x . ,(set)) . ,a))
-         '()
-         w))
-
-(printf "w : ~s\n" w)
+  (make-hash (foldr (lambda (x a)
+                      (cons `(,x . ,(set)) a)) '() w)))
 (printf "v->s : ~s\n" v->s)
-(printf "q : ~s\n" q)
 
-(color-graph g q w v->s)
+
+(define vertex->colors
+  (let* ([q (make-pqueue (lambda (x1 x2)
+                           (> (set-count (dict-ref v->s x1)) (set-count (dict-ref v->s x2)))))]
+         [vertex->node (map (lambda (v) (cons v (pqueue-push! q v))) w)])
+    (printf "vertex->node : ~s\n" vertex->node)
+    (color-graph g q w v->s vertex->node)))
 |#
