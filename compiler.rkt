@@ -4,7 +4,8 @@
          racket/fixnum
          "interp-Rint.rkt"
          "utilities.rkt"
-         graph)
+         graph
+         "priority_queue.rkt")
 (provide (all-defined-out))
 
 (define framesize 16)
@@ -15,6 +16,7 @@
 (define caller-saved '(rax rcx rdx rsi rdi r8 r9 r10 r11))
 (define callee-saved '(rsp rbp rbx r12 r13 r14 r15))
 (define arg-regs (list->set '(rdi rsi rdx rcx r8 r9)))
+(define usable-registers (list->set '(rax rcx rdx rsi rdi r8 r9 r10 r11 rbx r12 r13 r14 r15)))
 
 ;; Partial evaluation pass described in the book.
 (define (pe-neg r)
@@ -469,7 +471,45 @@
                                       (bi-block (cdr label-block))))
                               label-blocks)])
        (X86Program info label-blocks))]))
-#|
+
+(define (min-free-list l)
+  (match l
+    [`(,a) (add1 a)]
+    [`(,x . (,y . ,d))
+      (if (= (add1 x) y)
+        (min-free-list `(,y . ,d))
+        (add1 x))]))
+
+; NOTE : Can be optimized to O(n) using some obscure mutation tricks
+(define (min-free s)
+  (let* ([l (set->list s)]
+         [l (sort l <)])
+    (if (or (equal? '() l) (> (car l) 0))
+      0
+      (min-free-list l))))
+
+(define (update-neighbors vertex->color color neighbors)
+  (match neighbors
+    [`() vertex->color]
+    [`(,n . ,d)
+      (let* ([s (dict-ref vertex->color n)]
+             [vertex->color (dict-set vertex->color n (set-union s (set color)))])
+        (update-neighbors vertex->color color d))]))
+
+(define (color-graph g q w vertex->satur [vertex->color '()])
+  (match w
+    ['() vertex->color]
+    [else (let* ([v (car (pqueue-pop! q))]
+                 [w (set-remove w v)]
+                 [satur (dict-ref vertex->satur v)]
+                 [color (min-free satur)]
+                 [neighbors (filter Var? (get-neighbors g v))]
+                 [_ (foldr (lambda (x a)
+                             (pqueue-decrease-key! q (cons x (set-count (dict-ref vertex->satur x)))))
+                           '()
+                           (set->list w))]
+                 [vertex->satur (update-neighbors vertex->satur color neighbors)])
+            (color-graph g q w vertex->satur vertex->color))]))
 (define b
   (Block '()
          `(,(Instr 'movq `(,(Imm 1) ,(Var 'v)))
@@ -485,12 +525,34 @@
             ,(Instr 'movq `(,(Var 't) ,(Reg 'rax)))
             ,(Jmp 'conclusion))))
 
+#|
 (define g
   (let ([b (bi-block (ul-block b))])
     (match b
       [(Block info instrs)
        (dict-ref info 'conflicts)])))
 
-(printf "Vertices : ~s\n" (get-vertices g))
-(printf "Edges : ~s\n" (get-edges g))
+(define w (filter Var? (get-vertices g)))
+
+(define q
+  (let ([q (make-pqueue (lambda (x1 x2)
+                          (> (cdr x1) (cdr x2))))])
+    (begin (foldr
+             (lambda (x a)
+               (pqueue-push! q (cons x 0)))
+             q
+             w)
+           q)))
+
+(define v->s
+  (foldr (lambda (x a)
+           `((,x . ,(set)) . ,a))
+         '()
+         w))
+
+(printf "w : ~s\n" w)
+(printf "v->s : ~s\n" v->s)
+(printf "q : ~s\n" q)
+
+(color-graph g q w v->s)
 |#
