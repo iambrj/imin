@@ -13,9 +13,15 @@
 (define (round-frame i)
   (* 16 (exact-ceiling (/ i 16.))))
 
-(define caller-saved '(rax rcx rdx rsi rdi r8 r9 r10 r11))
-(define callee-saved '(rsp rbp rbx r12 r13 r14 r15))
-(define arg-regs (list->set '(rdi rsi rdx rcx r8 r9)))
+(define caller-saved
+  (let ([r '(rax rcx rdx rsi rdi r8 r9 r10 r11)])
+    (map Reg r)))
+(define callee-saved
+  (let ([r '(rsp rbp rbx r12 r13 r14 r15)])
+    (map Reg r)))
+(define arg-regs
+  (let ([r '(rdi rsi rdx rcx r8 r9)])
+    (map Reg r)))
 ; '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
 (define usable-registers
   (let ([r '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)])
@@ -291,100 +297,6 @@
                            (round-frame (- (cdr (last var->stk)))))])
        (X86Program (dict-set info 'stack-space stack-space) label-blocks))]))
 
-(define (pi-instr instr)
-  (match instr
-    [(Instr op args)
-     (match args
-       [`(,(Deref 'rbp x) ,(Deref 'rbp y))
-         `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
-            ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
-       [_ `(,instr)])]
-    [_ `(,instr)]))
-
-(define (pi-block blk)
-  (match blk
-    [(Block info instrs)
-     (let ([instrs (foldl (lambda (instr acc)
-                            (append acc (pi-instr instr)))
-                          '()
-                          instrs)])
-       (Block info instrs))]))
-
-;; patch-instructions : psuedo-x86 -> x86
-(define (patch-instructions p)
-  (match p
-    [(X86Program info label-blocks)
-     (let ([label-blocks (map (lambda (label-block)
-                                (cons (car label-block)
-                                      (pi-block (cdr label-block))))
-                              label-blocks)])
-       (X86Program info label-blocks))]))
-
-(define (print-x86-arg arg)
-  (match arg
-    [(Imm i) (string-append "$" (number->string i))]
-    [(Reg r) (string-append "%" (symbol->string r))]
-    [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
-    [else (error "print-x86-arg passed non-arg expr : " arg)]))
-
-(define (print-x86-args args)
-  (match args
-    [`(,a) (print-x86-arg a)]
-    [`(,a1 ,a2)
-      (string-append (print-x86-arg a1) ", " (print-x86-arg a2))]))
-
-(define (print-x86-instr instr)
-  (match instr
-    [(Instr op args)
-     (string-append (symbol->string op) " "
-                    (print-x86-args args))]
-    [(Callq l i) (symbol->string l)]
-    [(Retq) "retq"]
-    [(Jmp l) (string-append "jmp " (symbol->string l) "\n")]))
-
-(define (print-x86-block blk)
-  (match blk
-    [(Block info instrs)
-     (foldr (lambda (instr acc)
-              (string-append "\t" (print-x86-instr instr) "\n" acc))
-            ""
-            instrs)]
-    [_ (error "print-x86-block passed non block value : " blk)]))
-
-(define (print-main-block stack-space)
-  (string-append "main:\n"
-                 "\tpushq %rbp\n"
-                 "\tmovq %rsp, %rbp\n"
-                 "\tsubq $" (number->string stack-space) ", %rsp\n"
-                 "\tjmp start\n"))
-
-(define (print-conclusion-block stack-space)
-  (string-append "conclusion:\n"
-                 "\taddq $" (number->string stack-space) ", %rsp\n"
-                 "\tpopq %rbp\n"
-                 "\tretq\n"))
-
-;; print-x86 : x86 -> string
-(define (print-x86 p)
-  (match p
-    [(X86Program info label-blocks)
-     (let* ([stack-space (assv 'stack-space info)]
-            [stack-space (if stack-space
-                           (cdr stack-space)
-                           0)]
-            [main (print-main-block stack-space)]
-            [conclusion (print-conclusion-block stack-space)]
-            [label-blocks (foldl (lambda (label-block acc)
-                                   (string-append (symbol->string (car label-block)) ":\n"
-                                                  (print-x86-block (cdr label-block))
-                                                  (if (equal? (car label-block) 'start)
-                                                    "\t.globl main\n"
-                                                    "")
-                                                  acc))
-                                 ""
-                                 label-blocks)])
-       (string-append label-blocks main conclusion))]))
-
 (define (instr-w instr)
   (match instr
     [(Instr _ `(,_ ,a2)) (ul-arg a2)]
@@ -585,14 +497,128 @@
                    [(var->mem stack-space)
                     (var->mem vertex->color (map (lambda (r)
                                                    (cons (index-of usable-registers r) r))
-                                                 usable-registers))])
+                                                 usable-registers))]
+                   [(used-callee) (filter (lambda (r)
+                                            (member r callee-saved))
+                                          (dict-values var->mem))])
        (X86Program (dict-set* info
                               'stack-space stack-space
-                              'var->mem var->mem)
+                              'var->mem var->mem
+                              'used-callee used-callee)
                    (map (lambda (label-block)
                           (cons (car label-block)
                                 ((ar-block var->mem) (cdr label-block))))
                         label-blocks)))]))
+
+(define (trivial-mov instr)
+  (match instr
+    [(Instr 'mov `(,a ,a)) #f]
+    [_ #t]))
+
+(define (pi-instr instr)
+  (match instr
+    [(Instr op `(,(Deref 'rbp x) ,(Deref 'rbp y)))
+     `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
+        ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
+    [_ `(,instr)]))
+
+(define (pi-block blk)
+  (match blk
+    [(Block info instrs)
+     (let* ([instrs (filter trivial-mov instrs)]
+            [instrs (foldl (lambda (i a)
+                             (append a (pi-instr i)))
+                           '()
+                           instrs)])
+       (Block info instrs))]))
+
+;; patch-instructions : psuedo-x86 -> x86
+; 1. Remove trivial moves e.g. mov rax rax
+; 2. Remove multi memory accesses in same instruction e.g. transform mov -8rbp,
+; -16rbp to mov -8rbp, rax + mov rax, -16rbp
+(define (patch-instructions p)
+  (match p
+    [(X86Program info label-blocks)
+     (let ([label-blocks (map (lambda (label-block)
+                                (cons (car label-block)
+                                      (pi-block (cdr label-block))))
+                              label-blocks)])
+       (X86Program info label-blocks))]))
+
+(define (print-x86-arg arg)
+  (match arg
+    [(Imm i) (string-append "$" (number->string i))]
+    [(Reg r) (string-append "%" (symbol->string r))]
+    [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
+    [else (error "print-x86-arg passed non-arg expr : " arg)]))
+
+(define (print-x86-args args)
+  (match args
+    [`(,a) (print-x86-arg a)]
+    [`(,a1 ,a2)
+      (string-append (print-x86-arg a1) ", " (print-x86-arg a2))]))
+
+(define (print-x86-instr instr)
+  (match instr
+    [(Instr op args)
+     (string-append (symbol->string op) " "
+                    (print-x86-args args))]
+    [(Callq l i) (symbol->string l)]
+    [(Retq) "retq"]
+    [(Jmp l) (string-append "jmp " (symbol->string l) "\n")]))
+
+(define (print-x86-block blk)
+  (match blk
+    [(Block info instrs)
+     (foldr (lambda (instr acc)
+              (string-append "\t" (print-x86-instr instr) "\n" acc))
+            ""
+            instrs)]
+    [_ (error "print-x86-block passed non block value : " blk)]))
+
+(define (print-main-block stack-space used-callee)
+  (string-append "main:\n"
+                 "\tpushq %rbp\n"
+                 "\tmovq %rsp, %rbp\n"
+                 (apply string-append
+                        (map (lambda (r)
+                               (string-append "\tpushq %"
+                                              (symbol->string (Reg-name r))
+                                              "\n"))
+                             used-callee))
+                 "\tsubq $" (number->string (round-frame (+ (* 8 (length used-callee)) stack-space))) ", %rsp\n"
+                 "\tjmp start\n"))
+
+(define (print-conclusion-block stack-space used-callee)
+  (string-append "conclusion:\n"
+                 (apply string-append
+                        (map (lambda (r)
+                               (string-append "\tpophq %"
+                                              (symbol->string (Reg-name r))
+                                              "\n"))
+                             used-callee))
+                 "\taddq $" (number->string (round-frame (+ (* 8 (length used-callee)) stack-space))) ", %rsp\n"
+                 "\tpopq %rbp\n"
+                 "\tretq\n"))
+
+;; print-x86 : x86 -> string
+(define (print-x86 p)
+  (match p
+    [(X86Program info label-blocks)
+     (let* ([stack-space (dict-ref info 'stack-space)]
+            [used-callee (dict-ref info 'used-callee)]
+            [main (print-main-block stack-space used-callee)]
+            [conclusion (print-conclusion-block stack-space used-callee)]
+            [label-blocks (foldl (lambda (label-block acc)
+                                   (string-append (symbol->string (car label-block)) ":\n"
+                                                  (print-x86-block (cdr label-block))
+                                                  (if (equal? (car label-block) 'start)
+                                                    "\t.globl main\n"
+                                                    "")
+                                                  acc))
+                                 ""
+                                 label-blocks)])
+       (string-append label-blocks main conclusion))]))
 
 #|
 (define v->m (list (cons (Var 'x18487) (Reg 'rbx)) (cons (Var 'x18488) (Reg 'rax))))
