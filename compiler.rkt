@@ -16,7 +16,10 @@
 (define caller-saved '(rax rcx rdx rsi rdi r8 r9 r10 r11))
 (define callee-saved '(rsp rbp rbx r12 r13 r14 r15))
 (define arg-regs (list->set '(rdi rsi rdx rcx r8 r9)))
-(define usable-registers (list->set '(rax rcx rdx rsi rdi r8 r9 r10 r11 rbx r12 r13 r14 r15)))
+;  '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+(define usable-registers
+  (let ([r '(rax rbx)])
+    (map Reg r)))
 
 ;; Partial evaluation pass described in the book.
 (define (pe-neg r)
@@ -286,7 +289,7 @@
             [stack-space (if (empty? var->stk)
                            0
                            (round-frame (- (cdr (last var->stk)))))])
-       (X86Program (cons`(stack-space . ,stack-space) info) label-blocks))]))
+       (X86Program (dict-set info 'stack-space stack-space) label-blocks))]))
 
 (define (pi-instr instr)
   (match instr
@@ -402,7 +405,10 @@
     [(or (Var _) (Reg _)) (set a)]
     [_ (set)]))
 
-; Lafter(k) = Lafter(k + 1) - W(k) U R(k)
+; Lafter(n) = {}
+; Lafter(k) =  Lbefore(k - 1)
+; Lbefore(k) = (Lafter(k) - W(k)) U R(k)
+; Thus, Lafter(k) = Lafter(k + 1) - W(k) U R(k)
 (define (ul-instrs instrs after label->live)
   (match instrs
     ['() after]
@@ -436,22 +442,17 @@
                               label-blocks)])
        (X86Program info label-blocks))]))
 
-; XXX : Callq not handled! Need to take care of caller saved variables
+; FIXME : Callq not handled! Need to take care of caller saved variables
 (define (bi-instr instr live-after g)
   (match instr
     [(Instr 'movq `(,s ,d))
-     (let ([_ (map (lambda (v)
-                     (if (or (equal? v d) (equal? v s))
-                       (void)
-                       (add-edge! g d v)))
-                   (set->list live-after))])
+     (let ([_ (for ([v (set->list live-after)])
+                (unless (or (equal? v d) (equal? v s)) (add-edge! g d v)))])
        g)]
     [else (let* ([w (instr-w instr)]
                  [_ (for* ([d w]
                            [v live-after])
-                      (if (equal? v d)
-                        (void)
-                        (add-edge! g d v)))])
+                      (unless (equal? v d) (add-edge! g d v)))])
             g)]))
 
 (define (bi-block blk)
@@ -462,16 +463,18 @@
             [g (undirected-graph '())]
             [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
             [_ (for ([i instrs] [la live-after]) (bi-instr i la g))])
-       (Block (dict-set info 'conflicts g) instrs))]))
+       ; Return (Block (dict-set info 'conflicts g) instrs) instead if want
+       ; block-wise interference graphs
+       g)]))
 
 (define (build-interference p)
+  ; XXX : hardcoding for single start block, will have to fix when language has
+  ; more features
   (match p
     [(X86Program info label-blocks)
-     (let ([label-blocks (map (lambda (label-block)
-                                (cons (car label-block)
-                                      (bi-block (cdr label-block))))
-                              label-blocks)])
-       (X86Program info label-blocks))]))
+     (let* ([start-block (dict-ref label-blocks 'start)]
+            [g (bi-block start-block)])
+       (X86Program (dict-set info 'conflicts g) label-blocks))]))
 
 (define (min-free-list l)
   (match l
@@ -497,7 +500,7 @@
              [_ (dict-set! vertex->satur n (set-union s (set color)))])
         (update-neighbors! vertex->satur color d))]))
 
-(define (color-graph g q w vertex->satur vertex->node [vertex->color '()])
+(define (color-graph g q w vertex->satur vertex->node vertex->color)
   (match w
     ['() vertex->color]
     [else (let* ([v (pqueue-pop! q)]
@@ -510,9 +513,90 @@
                            '()
                            neighbors)]
                  [vertex->satur (update-neighbors! vertex->satur color neighbors)])
-            (color-graph g q w vertex->satur vertex->node `((,v . ,color) . ,vertex->color)))]))
+            (color-graph g q w vertex->satur vertex->node (dict-set
+                                                            vertex->color v
+                                                            color)))]))
+
+(define (var->mem var->color color->reg)
+  (let* ([maxcolor (apply max (dict-keys color->reg))]
+         [spilled (foldr (lambda (k a)
+                           (if (> (dict-ref var->color k)
+                                  maxcolor)
+                             (dict-set a k (- maxcolor (dict-ref k var->color)))
+                             a))
+                         '()
+                         (dict-keys var->color))]
+         [color->stk (foldr (lambda (color a)
+                              (dict-set a color (Deref 'rbp (* -8 color))))
+                            '()
+                            spilled)]
+         [color->reg (append color->reg color->stk)])
+    (values (dict-map var->color (lambda (v c)
+                                   `(,v . ,(dict-ref color->reg c))))
+            (length (dict-values color->stk)))))
+
+(define ((ar-arg var->mem) arg)
+  (match arg
+    [(Var v) (dict-ref var->mem (Var v))]
+    [_ arg]))
+
+(define ((ar-instr var->mem) instr)
+  (match instr
+    [(Instr i args) (Instr i (map (ar-arg var->mem) args))]
+    [_ instr]))
+
+(define ((ar-block var->mem) blk)
+  (match blk
+    [(Block info instrs)
+     (Block info (map (ar-instr var->mem) instrs))]))
+
+(define (allocate-registers p)
+  (match p
+    [(X86Program info label-blocks)
+     (let*-values ([(g) (dict-ref info 'conflicts)]
+                   [(w) (filter Var? (get-vertices g))]
+                   [(r) (filter Reg? (get-vertices g))]
+                   [(vertex->color) (foldr (lambda (r a)
+                                             (if (member r usable-registers)
+                                               (dict-set a r (index-of
+                                                               usable-registers
+                                                               r))
+                                               a))
+                                           '()
+                                           r)]
+                   [(vertex->sat)
+                    (make-hash (foldr (lambda (v a)
+                                        (let* ([n (get-neighbors g v)]
+                                               [s (foldr (lambda (n a)
+                                                           (if (dict-has-key? vertex->color n)
+                                                             (set-union a (set (dict-ref vertex->color n)))
+                                                             a))
+                                                         (set)
+                                                         n)])
+                                          `((,v . ,s) . ,a))) '() w))]
+                   [(q)
+                    (make-pqueue (lambda (x1 x2)
+                                   (> (set-count (dict-ref vertex->sat x1))
+                                      (set-count (dict-ref vertex->sat x2)))))]
+                   [(vertex->node)
+                    (map (lambda (v) (cons v (pqueue-push! q v))) w)]
+                   [(vertex->color)
+                    (color-graph g q w vertex->sat vertex->node vertex->color)]
+                   [(var->mem stack-space)
+                    (var->mem vertex->color (map (lambda (r)
+                                                   (cons (index-of usable-registers r) r))
+                                                 usable-registers))])
+       (X86Program (dict-set* info
+                              'stack-space stack-space
+                              'var->mem var->mem)
+                   (map (lambda (label-block)
+                          (cons (car label-block)
+                                ((ar-block var->mem) (cdr label-block))))
+                        label-blocks)))]))
 
 #|
+(define v->m (list (cons (Var 'x18487) (Reg 'rbx)) (cons (Var 'x18488) (Reg 'rax))))
+
 (define b
   (Block '()
          `(,(Instr 'movq `(,(Imm 1) ,(Var 'v)))
@@ -528,24 +612,25 @@
             ,(Instr 'movq `(,(Var 't) ,(Reg 'rax)))
             ,(Jmp 'conclusion))))
 
-(define g
-  (let ([b (bi-block (ul-block b))])
-    (match b
-      [(Block info instrs)
-       (dict-ref info 'conflicts)])))
+(define b1
+  (Block
+    '()
+    (list
+     (Instr 'movq (list (Imm 20) (Var 'x18487)))
+     (Instr 'movq (list (Imm 0) (Var 'x18488)))
+     (Instr 'addq (list (Imm 22) (Var 'x18488)))
+     (Instr 'movq (list (Var 'x18487) (Reg 'rax)))
+     (Instr 'addq (list (Var 'x18488) (Reg 'rax)))
+     (Jmp 'conclusion))))
 
-(define w (filter Var? (get-vertices g)))
-
-(define v->s
-  (make-hash (foldr (lambda (x a)
-                      (cons `(,x . ,(set)) a)) '() w)))
-(printf "v->s : ~s\n" v->s)
-
-
-(define vertex->colors
-  (let* ([q (make-pqueue (lambda (x1 x2)
+(define (color-block b)
+  (let* ([g (bi-block (ul-block b))]
+         [w (filter Var? (get-vertices g))]
+         [v->s (make-hash (foldr (lambda (x a)
+                                   (cons `(,x . ,(set)) a)) '() w))]
+         [q (make-pqueue (lambda (x1 x2)
                            (> (set-count (dict-ref v->s x1)) (set-count (dict-ref v->s x2)))))]
          [vertex->node (map (lambda (v) (cons v (pqueue-push! q v))) w)])
-    (printf "vertex->node : ~s\n" vertex->node)
     (color-graph g q w v->s vertex->node)))
+
 |#

@@ -19,9 +19,10 @@
     ("instruction selection" ,select-instructions ,interp-x86-0)
     ("uncover live" ,uncover-live ,interp-x86-0)
     ("build interference" ,build-interference ,interp-x86-0)
-    ("assign homes" ,assign-homes ,interp-x86-0)
+    ("allocate registers" ,allocate-registers ,interp-x86-0)
+    ; ("assign homes" ,assign-homes ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
-    ("print x86" ,print-x86 #f)
+    ; ("print x86" ,print-x86 #f)
     ;; Uncomment the following passes as you finish them.
     ))
 
