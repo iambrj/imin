@@ -354,7 +354,6 @@
                               label-blocks)])
        (X86Program info label-blocks))]))
 
-; FIXME : Callq not handled! Need to take care of caller saved variables
 (define (bi-instr instr live-after g)
   (match instr
     [(Instr 'movq `(,s ,d))
@@ -593,7 +592,7 @@
   (string-append "conclusion:\n"
                  (apply string-append
                         (map (lambda (r)
-                               (string-append "\tpophq %"
+                               (string-append "\tpopq %"
                                               (symbol->string (Reg-name r))
                                               "\n"))
                              used-callee))
