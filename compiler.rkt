@@ -16,9 +16,9 @@
 (define caller-saved '(rax rcx rdx rsi rdi r8 r9 r10 r11))
 (define callee-saved '(rsp rbp rbx r12 r13 r14 r15))
 (define arg-regs (list->set '(rdi rsi rdx rcx r8 r9)))
-;  '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+; '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
 (define usable-registers
-  (let ([r '(rax rbx)])
+  (let ([r '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)])
     (map Reg r)))
 
 ;; Partial evaluation pass described in the book.
@@ -519,21 +519,21 @@
 
 (define (var->mem var->color color->reg)
   (let* ([maxcolor (apply max (dict-keys color->reg))]
-         [spilled (foldr (lambda (k a)
-                           (if (> (dict-ref var->color k)
-                                  maxcolor)
-                             (dict-set a k (- maxcolor (dict-ref k var->color)))
-                             a))
-                         '()
-                         (dict-keys var->color))]
+         [spilled->stk (foldr (lambda (k a)
+                                (if (> (dict-ref var->color k)
+                                       maxcolor)
+                                  (dict-set a k (- (dict-ref var->color k) maxcolor))
+                                  a))
+                              '()
+                              (dict-keys var->color))]
          [color->stk (foldr (lambda (color a)
                               (dict-set a color (Deref 'rbp (* -8 color))))
                             '()
-                            spilled)]
+                            (dict-values spilled->stk))]
          [color->reg (append color->reg color->stk)])
     (values (dict-map var->color (lambda (v c)
                                    `(,v . ,(dict-ref color->reg c))))
-            (length (dict-values color->stk)))))
+            (length (dict-values spilled->stk)))))
 
 (define ((ar-arg var->mem) arg)
   (match arg
