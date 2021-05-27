@@ -7,6 +7,11 @@ A compiler for (a subset of) Racket -> x86-64, written in Racket
 - [x86-64 for the compiler writer](http://web.cecs.pdx.edu/~apt/cs491/x86-64.pdf)
 - [Indiana University compiler course](https://iucompilercourse.github.io/IU-P423-P523-E313-E513-Fall-2020/)
 - [Original ICFP pearl on nanopass compilers](https://legacy.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf)
+- [Andy Keep dissertation on nanopass compilers](http://andykeep.com/pubs/dissertation.pdf)
+- [An Incremental Approach to Compiler
+  Construction](http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf), [Nada Amin's
+  implementation](https://github.com/namin/inc) (which *can* compile itself!)
+- [Racket nanopass library](https://docs.racket-lang.org/nanopass/index.html)
 - [Intel x86 Manual](http://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-manual-325462.pdf?_ga=1.200286509.2020252148.1452195021)
 
 ## Adding compiler tests
