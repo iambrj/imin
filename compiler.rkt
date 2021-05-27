@@ -52,20 +52,19 @@
 ; uniquify-exp -> remove-complex-opera* -> explicate-control ->
 ; select-instructions -> assign-homes -> patch-instructions -> print x86
 
-(define (uniquify-exp env)
-  (lambda (e)
-    (match e
-      [(Var x)
-       (Var (dict-ref env x))]
-      [(Int n) (Int n)]
-      [(Let x e body)
-       (let* ([x1 (gensym x)]
-              [e1 ((uniquify-exp env) e)]
-              [env1 (dict-set env x x1)]
-              [body1 ((uniquify-exp env1) body)])
-         (Let x1 e1 body1))]
-      [(Prim op es)
-       (Prim op (for/list ([e es]) ((uniquify-exp env) e)))])))
+(define ((uniquify-exp env) e)
+  (match e
+    [(Var x)
+     (Var (dict-ref env x))]
+    [(Int n) (Int n)]
+    [(Let x e body)
+     (let* ([x1 (gensym x)]
+            [e1 ((uniquify-exp env) e)]
+            [env1 (dict-set env x x1)]
+            [body1 ((uniquify-exp env1) body)])
+       (Let x1 e1 body1))]
+    [(Prim op es)
+     (Prim op (for/list ([e es]) ((uniquify-exp env) e)))]))
 
 ;; uniquify : R1 -> R1
 (define (uniquify p)
@@ -135,6 +134,8 @@
     [(Program info e)
      (Program info (rco-exp e))]))
 
+; c1 : Assign, Assign, ..., Ret
+; c2 : Assign, Assign, ..., Ret
 (define (merge-conts c1 c2 x)
   (match c1
     [(Return v)
@@ -177,6 +178,7 @@
      (values vars
              (Seq (Assign (Var x) (Int n)) cont))]
     [(Let y rhs body)
+     ; TODO : try passing cont to explicate-tail to avoid merge-conts
      (let*-values ([(vars cont1) (explicate-tail body vars)]
                    [(cont) (merge-conts cont1 cont x)]
                    [(vars) (if (not (member y vars))
@@ -185,8 +187,8 @@
        (explicate-assign rhs y cont vars))]
     [(Prim op es)
      (values vars
-             (Seq (Assign (Var x) e) cont))]
-    [else (error "explicate-tail unhandled case" e)]))
+             (Seq (Assign (Var x) (Prim op es)) cont))]
+    [else (error "explicate-assign unhandled case" e)]))
 
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)
@@ -216,8 +218,11 @@
      (let ([a1 (si-atm a1)]
            [a2 (si-atm a2)])
        (cond
-         [(equal? (Var v) a1) `(,(Instr 'addq `(,(si-atm a1) ,(Var v))))]
-         [(equal? (Var v) a2) `(,(Instr 'addq `(,(si-atm a2) ,(Var v))))]
+         ; v = (+ v a2)
+         [(equal? (Var v) a1) `(,(Instr 'addq `(,(si-atm a2) ,(Var v))))]
+         ; v = (+ a1 v)
+         [(equal? (Var v) a2) `(,(Instr 'addq `(,(si-atm a1) ,(Var v))))]
+         ; v = (+ a1 a2)
          [else `(,(Instr 'movq `(,a1 ,(Var v))) ,(Instr 'addq `(,a2 ,(Var v))))]))]
     [else (error "si-stmt passed non-statement expression : " e)]))
 
@@ -511,8 +516,8 @@
 
 (define (trivial-mov instr)
   (match instr
-    [(Instr 'mov `(,a ,a)) #f]
-    [_ #t]))
+    [(Instr 'mov `(,a ,a)) #t]
+    [_ #f]))
 
 (define (pi-instr instr)
   (match instr
@@ -524,7 +529,7 @@
 (define (pi-block blk)
   (match blk
     [(Block info instrs)
-     (let* ([instrs (filter trivial-mov instrs)]
+     (let* ([instrs (filter (compose not trivial-mov) instrs)]
             [instrs (foldl (lambda (i a)
                              (append a (pi-instr i)))
                            '()
