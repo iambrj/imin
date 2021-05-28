@@ -4,6 +4,9 @@
 (require "utilities.rkt")
 (require "interp-Rvar.rkt")
 (require "interp-Cvar.rkt")
+(require "interp-Rif.rkt")
+(require "interp-Cif.rkt")
+(require "type-check-Rif.rkt")
 (require "interp.rkt")
 (require "compiler.rkt")
 ;; (debug-level 1)
@@ -12,7 +15,8 @@
 ;; Define the passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
 ;; should be named "compiler.rkt"
-(define passes
+(define passes '())
+#;(define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
     ("explicate control" ,explicate-control ,interp-Cvar)
@@ -40,8 +44,8 @@
          all-tests)))
 
 (debug-level 1)
-(interp-tests "var" #f passes interp-Rvar "var_test" (tests-for "var"))
+(interp-tests "cond" type-check-Rif passes interp-Rif "cond_test" (tests-for "cond"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-(compiler-tests "var" #f passes "var_test" (tests-for "var"))
+; (compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
