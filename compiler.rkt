@@ -77,6 +77,7 @@
     [(Var v) #t]
     [else #f]))
 
+; simple expression, new env
 (define (rco-atm e)
   (match e
     [(Int i) (values (Int i) '())]
@@ -516,7 +517,7 @@
 
 (define (trivial-mov instr)
   (match instr
-    [(Instr 'mov `(,a ,a)) #t]
+    [(Instr 'movq `(,a ,a)) #t]
     [_ #f]))
 
 (define (pi-instr instr)
@@ -534,7 +535,8 @@
                              (append a (pi-instr i)))
                            '()
                            instrs)])
-       (Block info instrs))]))
+       ; really necessary?
+       (Block info (filter (compose not trivial-mov) instrs)))]))
 
 ;; patch-instructions : psuedo-x86 -> x86
 ; 1. Remove trivial moves e.g. mov rax rax
@@ -567,7 +569,8 @@
     [(Instr op args)
      (string-append (symbol->string op) " "
                     (print-x86-args args))]
-    [(Callq l i) (symbol->string l)]
+    [(Callq l i) (string-append "callq "
+                                (symbol->string l))]
     [(Retq) "retq"]
     [(Jmp l) (string-append "jmp " (symbol->string l) "\n")]))
 
