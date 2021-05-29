@@ -104,6 +104,10 @@
     [(Var x)
      (Var (dict-ref env x))]
     [(Int n) (Int n)]
+    [(Bool b) (Bool b)]
+    [(If c t e)
+     (let ([u (uniquify-exp env)])
+       (If (u c) (u t) (u e)))]
     [(Let x e body)
      (let* ([x1 (gensym x)]
             [e1 ((uniquify-exp env) e)]

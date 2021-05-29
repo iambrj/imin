@@ -15,7 +15,9 @@
 ;; Define the passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
 ;; should be named "compiler.rkt"
-(define passes '())
+(define passes
+  `(("shrink" ,shrink ,interp-Rif ,type-check-Rif)
+    ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)))
 #;(define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
