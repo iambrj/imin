@@ -11,6 +11,8 @@ A compiler for (a subset of) Racket -> x86-64, written in Racket
 - [An Incremental Approach to Compiler
   Construction](http://scheme2006.cs.uchicago.edu/11-ghuloum.pdf), [Nada Amin's
   implementation](https://github.com/namin/inc) (which *can* compile itself!)
+- [Partial computation, Yoshihiko Futamura](https://repository.kulib.kyoto-u.ac.jp/dspace/bitstream/2433/103401/1/0482-14.pdf)
+- [Interference graphs of programs in SSA-form](https://compilers.cs.uni-saarland.de/papers/ifg_ssa.pdf)
 - [Racket nanopass library](https://docs.racket-lang.org/nanopass/index.html)
 - [Intel x86 Manual](http://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-manual-325462.pdf?_ga=1.200286509.2020252148.1452195021)
 
