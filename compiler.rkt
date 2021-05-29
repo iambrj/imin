@@ -49,6 +49,53 @@
   (match p
     [(Program info e) (Program info (pe-exp e))]))
 
+(define (shrink-exp e)
+  (match e
+    [(Int i) (Int i)]
+    [(Bool b) (Bool b)]
+    [(Var v) (Var v)]
+    [(Let v e b) (Let v (shrink-exp e) (shrink-exp b))]
+    [(If c t e) (If (shrink-exp c) (shrink-exp t) (shrink-exp e))]
+    [(Prim '- `(,e1 ,e2))
+     (let ([e1 (shrink-exp e1)]
+           [e2 (shrink-exp e2)])
+       (Prim '+ `(,e1 ,(Prim '- `(,e2)))))]
+    [(Prim '+ es) (Prim '+ (map shrink-exp es))]
+    [(Prim '- `(,e))
+     (let ([e (shrink-exp e)])
+       (Prim '- `(,(shrink-exp e))))]
+    [(Prim 'read '()) (Prim 'read '())]
+    [(Prim 'and `(,e))
+     (let ([e (shrink-exp e)])
+       (Prim 'not `(,(shrink-exp e))))]
+    [(Prim 'and `(,e1 ,e2))
+     (let ([e1 (shrink-exp e1)]
+           [e2 (shrink-exp e2)])
+       (If e1 e2 (Bool #f)))]
+    [(Prim 'or `(,e1 ,e2))
+     (let ([e1 (shrink-exp e1)]
+           [e2 (shrink-exp e2)])
+       (If e1 (Bool #f) e2))]
+    [(Prim '< es) (Prim '< (shrink-exp es))]
+    [(Prim 'eq? es) (Prim 'eq? (shrink-exp es))]
+    [(Prim '<= `(,e1 ,e2))
+     (let ([e1 (shrink-exp e1)]
+           [e2 (shrink-exp e2)])
+       (If (Prim '< `(,e1 ,e2)) (Bool #t) (Prim 'eq? `(,e1 ,e2))))]
+    [(Prim '> `(,e1 ,e2))
+     (let ([e1 (shrink-exp e1)]
+           [e2 (shrink-exp e2)])
+       (If (Prim '< `(,e1 ,e2)) (Bool #f) (Bool #t)))]
+    [(Prim '>= `(,e1 ,e2))
+     (let ([e1 (shrink-exp e1)]
+           [e2 (shrink-exp e2)])
+       (Prim 'not `(,(Prim `< `(,e1 ,e2)))))]))
+
+(define (shrink p)
+  (match p
+    [(Program info e)
+     (Program info (shrink-exp e))]))
+
 ; uniquify-exp -> remove-complex-opera* -> explicate-control ->
 ; select-instructions -> assign-homes -> patch-instructions -> print x86
 
