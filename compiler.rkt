@@ -128,11 +128,12 @@
     [(Var v) #t]
     [else #f]))
 
-; simple expression, new env
+; atomic expression, new env
 (define (rco-atm e)
   (match e
     [(Int i) (values (Int i) '())]
     [(Var v) (values (Var v) '())]
+    [(Bool b) (values (Bool b) '())]
     [(Prim 'read '())
      (let ([tmp (gensym 'tmp)]) (values tmp `((,tmp . ,(Prim 'read '())))))]
     [(Prim '- `(,e1))
@@ -148,6 +149,9 @@
          (values tmp (append atm->subexpr1
                              atm->subexpr2
                              `((,tmp . ,(Prim '+ `(,atm1 ,atm2))))))))]
+    [(If c t e)
+     (let ([tmp (gensym 'tmp)])
+       (values tmp `((,tmp . ,(If (rco-exp c) (rco-exp t) (rco-exp e))))))]
     [(Let x v b)
      (let ([v (rco-exp v)]
            [b (rco-exp b)])
@@ -166,9 +170,10 @@
   (match e
     [(Int i) (Int i)]
     [(Var v) (Var v)]
+    [(Bool b) (Bool b)]
     [(Prim 'read '()) (Prim 'read '())]
-    [(Prim '- `(,e1))
-     (let-values ([(atm atm->expr) (rco-atm e1)])
+    [(Prim '- `(,e))
+     (let-values ([(atm atm->expr) (rco-atm e)])
        (let ([atm (if (symbol? atm) (Var atm) atm)])
          (make-lets atm->expr (Prim '- `(,atm)))))]
     [(Prim '+ `(,e1 ,e2))
@@ -177,6 +182,12 @@
        (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
              [atm2 (if (symbol? atm2) (Var atm2) atm2)])
          (make-lets (append atm->subexpr1 atm->subexpr2) (Prim '+ `(,atm1 ,atm2)))))]
+    [(Prim 'not `(,e))
+     (let-values ([(atm atm->expr) (rco-atm e)])
+       (let ([atm (if (symbol? atm) (Var atm) atm)])
+         (make-lets atm->expr (Prim '- `(,atm)))))]
+    [(If c t e)
+     (If (rco-exp c) (rco-exp t) (rco-exp e))]
     [(Let x v b) (Let x (rco-exp v) (rco-exp b))]))
 
 ;; remove-complex-opera* : R1 -> R1
