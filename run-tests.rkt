@@ -17,7 +17,8 @@
 ;; should be named "compiler.rkt"
 (define passes
   `(("shrink" ,shrink ,interp-Rif ,type-check-Rif)
-    ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)))
+    ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)
+   ("remove complex opera*" ,remove-complex-opera* ,interp-Rif ,type-check-Rif) ))
 #;(define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
