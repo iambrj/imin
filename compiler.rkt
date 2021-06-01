@@ -207,6 +207,15 @@
      (Seq a (merge-conts tail c2 x))]
     [else (error "Couldn't merge : " c1 c2)]))
 
+(define (block->goto b label->block)
+  (delay
+    (let ([b (force b)])
+      (match b
+        [(Goto l) (Goto l)]
+        [else (let ([l (gensym "block")])
+                (dict-set! label->block l b)
+                (Goto l))]))))
+
 ; explicate-pred (if e1 e2 e2) B1 B2 => B5
 ; add B1 and B2 to CFG with labels l1 and l2
 ; (explicate-pred e2 (goto l1) (goto l2)) => B3
@@ -215,32 +224,27 @@
 ; TODO : add following test
 ; (if (if (if #t #f #t) #f #t) )
 (define (explicate-pred c t e vars label->block)
-  (printf "[ep] c : ~s\nt : ~s\ne : ~s\n" c t e)
   (match c
     [(Var x)
      (values vars
-             (IfStmt (Prim 'eq? ((Var x) (Bool #t))) (Goto t) (Goto e)))]
+             ; XXX
+             ; Q : when/where do blocks t and e actually get evaluated?
+             ; A : explicate-pred must be called with promises that actually
+             ; evaluate t and e
+             (IfStmt (Prim 'eq? ((Var x) (Bool #t)))
+                     (force (block->goto t label->block))
+                     (force (block->goto e label->block))))]
     [(Bool #t)
-     (let*-values ([(lbl) (gensym "block")]
-                   [(vars instrs) (explicate-tail t vars label->block)]
-                   [(_) (dict-set! label->block lbl instrs)])
-       (values vars instrs))]
+     (values vars (force (block->goto t label->block)))]
     [(Bool #f)
-     (let*-values ([(lbl) (gensym "block")]
-                   [(vars instrs) (explicate-tail e vars label->block)]
-                   [(_) (dict-set! label->block lbl instrs)])
-       (values vars instrs))]
+     (values vars (force (block->goto e label->block)))]
     [(Prim 'not `(,e1))
      (explicate-pred e1 e t vars label->block)]
     [(Prim op es) #:when (or (eq? op 'eq?) (eq? op '<))
-     (let*-values ([(t-lbl) (gensym "block")]
-                   [(e-lbl) (gensym "block")]
-                   [(vars t-instrs) (explicate-tail e vars label->block)]
-                   [(vars e-instrs) (explicate-tail t vars label->block)]
-                   [(_) (dict-set*! label->block
-                                    t-lbl t-instrs
-                                    e-lbl e-instrs)])
-     (values vars (IfStmt (Prim op es) (Goto t-lbl) (Goto e-lbl))))]
+     (values vars
+             (IfStmt (Prim op es)
+                     (force (block->goto t label->block))
+                     (force (block->goto e label->block))))]
     [(Let x rhs body)
      (let-values ([(vars cont) (explicate-pred body t e vars label->block)])
        (explicate-assign rhs x cont vars label->block))]
@@ -248,7 +252,7 @@
      (let*-values ([(vars t) (explicate-pred t1 t e vars label->block)]
                    [(vars e) (explicate-pred e1 t e vars label->block)])
        (explicate-pred c1 t e vars label->block))]
-    [else (error "explicate-pred passed non bool type expr : " c)]))
+    [else (error "explicate-pred passed non-bool type expr : " c)]))
 
 (define (explicate-tail e vars label->block)
   (match e
@@ -275,21 +279,21 @@
   (match e
     [(Bool b)
      (values vars
-             (Seq (Assign (Var x) (Bool b)) cont))]
+             (Seq (Assign (Var x) (Bool b)) (force cont)))]
     [(Int n)
      (values vars
-             (Seq (Assign (Var x) (Int n)) cont))]
+             (Seq (Assign (Var x) (Int n)) (force cont)))]
     [(Var y)
      (values (remove-duplicates (cons y vars))
-             (Seq (Assign (Var x) (Var y)) cont))]
+             (Seq (Assign (Var x) (Var y)) (force cont)))]
     [(Let y rhs body)
      ; TODO : try passing cont to explicate-tail to avoid merge-conts
      (let*-values ([(vars cont1) (explicate-tail body vars label->block)]
-                   [(cont) (merge-conts cont1 cont x)])
+                   [(cont) (merge-conts cont1 (force cont) x)])
        (explicate-assign rhs y cont (remove-duplicates (cons y vars)) label->block))]
     [(Prim op es)
      (values vars
-             (Seq (Assign (Var x) (Prim op es)) cont))]
+             (Seq (Assign (Var x) (Prim op es)) (force cont)))]
     [(If c t e)
      (let*-values ([(vars cont-t) (explicate-assign t x cont vars label->block)]
                    [(vars cont-e) (explicate-assign e x cont vars label->block)])
