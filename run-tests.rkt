@@ -1,14 +1,15 @@
 #! /usr/bin/env racket
 #lang racket
 
-(require "utilities.rkt")
-(require "interp-Rvar.rkt")
-(require "interp-Cvar.rkt")
-(require "interp-Rif.rkt")
-(require "interp-Cif.rkt")
-(require "type-check-Rif.rkt")
-(require "interp.rkt")
-(require "compiler.rkt")
+(require "utilities.rkt"
+         "interp-Rvar.rkt"
+         "interp-Cvar.rkt"
+         "interp-Rif.rkt"
+         "interp-Cif.rkt"
+         "type-check-Rif.rkt"
+         "type-check-Cif.rkt"
+         "interp.rkt"
+         "compiler.rkt")
 ;; (debug-level 1)
 ;; (AST-output-syntax 'concrete-syntax)
 
@@ -18,7 +19,10 @@
 (define passes
   `(("shrink" ,shrink ,interp-Rif ,type-check-Rif)
     ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)
-   ("remove complex opera*" ,remove-complex-opera* ,interp-Rif ,type-check-Rif) ))
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Rif ,type-check-Rif)
+    ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
+    ("remove unused" ,remove-unused ,interp-Cif ,type-check-Cif)
+    ))
 #;(define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)

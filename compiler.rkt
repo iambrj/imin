@@ -307,6 +307,41 @@
                    [(_) (dict-set! label->block 'start tail)])
        (CProgram `((locals . ,vars)) label->block))]))
 
+(define ((add-edges-instr l g) i)
+  (match i
+    [(Goto l1) (add-edge! g l l1) g]
+    [(IfStmt _ (Goto l1) (Goto l2))
+     (add-edge! g l l1)
+     (add-edge! g l l2)
+     g]
+    [else g]))
+
+(define (add-edges b e g)
+  (match b
+    [(Assign _ e)
+     (add-edges b e g)]
+    []))
+
+(define (remove-unused-blocks label->block)
+  (let*-values ([(g) (directed-graph '())]
+                [(_) (for ([l (hash-keys label->block)]) (add-vertex! g l))]
+                [(_) (hash-for-each label->block (lambda (l b) (add-edges b l g)))]
+                [(d p) (bfs g 'start)]
+                [(_) (hash-for-each p (lambda (v p)
+                                        (unless (= v 'start)
+                                          (unless (not (equal? p #f))
+                                            (remove-vertex! g v)))))]
+                [(alive) (get-vertices g)]
+                [(alive-lbs) (filter (lambda (p)
+                                       (member (car p) alive)) (hash->list label->block))])
+    (make-hash alive-lbs)))
+            
+; Remove dead blocks and create cfg
+(define (remove-unused p)
+  (match p
+    [(CProgram info label->block)
+     (CProgram info (remove-unused-blocks label->block))]))
+
 (define (si-atm e)
   (match e
     [(Int n) (Imm n)]
