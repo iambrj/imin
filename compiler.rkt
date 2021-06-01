@@ -207,58 +207,103 @@
      (Seq a (merge-conts tail c2 x))]
     [else (error "Couldn't merge : " c1 c2)]))
 
-(define (explicate-tail e vars)
+; explicate-pred (if e1 e2 e2) B1 B2 => B5
+; add B1 and B2 to CFG with labels l1 and l2
+; (explicate-pred e2 (goto l1) (goto l2)) => B3
+; (explicate-pred e3 (goto l1) (goto l2)) => B4
+; (explicate-pred e1 B3 B4) => B5
+; TODO : add following test
+; (if (if (if #t #f #t) #f #t) )
+(define (explicate-pred c t e vars label->block)
+  (match c
+    [(Var x)
+     (values vars
+             (IfStmt (Prim 'eq? ((Var x) (Bool #t))) (Goto t) (Goto e)))]
+    [(Bool b)
+     (values vars
+             (if b (Goto t) (Goto e)))]
+    [(Prim 'not `(,e1))
+     (explicate-pred e1 e t vars label->block)]
+    [(Prim op es) #:when (or (eq? op 'eq?) (eq? op '<))
+     (values vars
+             (IfStmt (Prim op es) (Goto t) (Goto e)))]
+    [(Let x rhs body)
+     (let-values ([(vars cont) (explicate-pred body t e vars label->block)])
+       (explicate-assign rhs x cont vars label->block))]
+    [(If c1 t1 e1)
+     (let ([then-lbl (gensym "block")]
+           [else-lbl (gensym "block")])
+       (let*-values ([(vars t-instrs) (explicate-pred t1 t e vars label->block)]
+                     [(_) (dict-set! label->block then-lbl t-instrs)]
+                     [(vars e-instrs) (explicate-pred e1 t e vars label->block)]
+                     [(_) (dict-set! label->block else-lbl e-instrs)])
+         (explicate-pred c1 then-lbl else-lbl vars label->block)))]
+    [else (error "explicate-pred passed non bool type expr : " c)]))
+
+(define (explicate-tail e vars label->block)
   (match e
     [(Var x)
-     (let ([vars (if (not (member x vars))
-                   (cons x vars)
-                   vars)])
-       (values vars
-               (Return (Var x))))]
+     (values (remove-duplicates (cons x vars))
+             (Return (Var x)))]
+    [(Bool b)
+     (values vars
+             (Return (Bool b)))]
     [(Int n)
      (values vars
              (Return (Int n)))]
     [(Let x rhs body)
-     (let*-values ([(vars cont) (explicate-tail body vars)]
-                   [(vars) (if (not (member x vars))
-                             (cons x vars)
-                             vars)])
-       (explicate-assign rhs x cont vars))]
+     (let*-values ([(vars cont) (explicate-tail body vars label->block)])
+       (explicate-assign rhs x cont (remove-duplicates (cons x vars)) label->block))]
     [(Prim op es)
      (values vars
              (Return (Prim op es)))]
+    [(If c t e)
+     (let ([then-lbl (gensym "block")]
+           [else-lbl (gensym "block")])
+       (let*-values ([(vars t-instrs) (explicate-tail t vars label->block)]
+                     [(vars e-instrs) (explicate-tail e vars label->block)]
+                     [(_) (dict-set*! label->block then-lbl t-instrs else-lbl e-instrs)])
+         (explicate-pred c then-lbl else-lbl vars label->block)))]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
 
-(define (explicate-assign e x cont vars)
+(define (explicate-assign e x cont vars label->block)
   (match e
-    [(Var y)
-     (let ([vars (if (not (member y vars))
-                   (cons y vars)
-                   vars)])
-       (values vars
-               (Seq (Assign (Var x) (Var y)) cont)))]
+    [(Bool b)
+     (values vars
+             (Seq (Assign (Var x) (Bool b)) cont))]
     [(Int n)
      (values vars
              (Seq (Assign (Var x) (Int n)) cont))]
+    [(Var y)
+     (values (remove-duplicates (cons y vars))
+             (Seq (Assign (Var x) (Var y)) cont))]
     [(Let y rhs body)
      ; TODO : try passing cont to explicate-tail to avoid merge-conts
-     (let*-values ([(vars cont1) (explicate-tail body vars)]
-                   [(cont) (merge-conts cont1 cont x)]
-                   [(vars) (if (not (member y vars))
-                             (cons y vars)
-                             vars)])
-       (explicate-assign rhs y cont vars))]
+     (let*-values ([(vars cont1) (explicate-tail body vars label->block)]
+                   [(cont) (merge-conts cont1 cont x)])
+       (explicate-assign rhs y cont (remove-duplicates (cons y vars)) label->block))]
     [(Prim op es)
      (values vars
              (Seq (Assign (Var x) (Prim op es)) cont))]
+    [(If c t e)
+     (let ([then-lbl (gensym "block")]
+           [else-lbl (gensym "block")])
+       (let*-values ([(vars cont-t) (explicate-assign t x cont vars label->block)]
+                     [(vars cont-e) (explicate-assign e x cont vars label->block)]
+                     [(_) (dict-set*! label->block then-lbl cont-t else-lbl cont-e)])
+         ; TODO : better way to handle variables? Each branch may introduce
+         ; different set of variables
+         (explicate-pred c then-lbl else-lbl vars label->block)))]
     [else (error "explicate-assign unhandled case" e)]))
 
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)
   (match p
     [(Program info body)
-     (let-values ([(vars tail) (explicate-tail body '())])
-       (CProgram `((locals . ,vars)) `((start . ,tail))))]))
+     (let*-values ([(label->block) (make-hash)]
+                   [(vars tail) (explicate-tail body '() label->block)]
+                   [(_) (dict-set! label->block 'start tail)])
+       (CProgram `((locals . ,vars)) label->block))]))
 
 (define (si-atm e)
   (match e
