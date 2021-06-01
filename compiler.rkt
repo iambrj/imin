@@ -215,29 +215,39 @@
 ; TODO : add following test
 ; (if (if (if #t #f #t) #f #t) )
 (define (explicate-pred c t e vars label->block)
+  (printf "[ep] c : ~s\nt : ~s\ne : ~s\n" c t e)
   (match c
     [(Var x)
      (values vars
              (IfStmt (Prim 'eq? ((Var x) (Bool #t))) (Goto t) (Goto e)))]
-    [(Bool b)
-     (values vars
-             (if b (Goto t) (Goto e)))]
+    [(Bool #t)
+     (let*-values ([(lbl) (gensym "block")]
+                   [(vars instrs) (explicate-tail t vars label->block)]
+                   [(_) (dict-set! label->block lbl instrs)])
+       (values vars instrs))]
+    [(Bool #f)
+     (let*-values ([(lbl) (gensym "block")]
+                   [(vars instrs) (explicate-tail e vars label->block)]
+                   [(_) (dict-set! label->block lbl instrs)])
+       (values vars instrs))]
     [(Prim 'not `(,e1))
      (explicate-pred e1 e t vars label->block)]
     [(Prim op es) #:when (or (eq? op 'eq?) (eq? op '<))
-     (values vars
-             (IfStmt (Prim op es) (Goto t) (Goto e)))]
+     (let*-values ([(t-lbl) (gensym "block")]
+                   [(e-lbl) (gensym "block")]
+                   [(vars t-instrs) (explicate-tail e vars label->block)]
+                   [(vars e-instrs) (explicate-tail t vars label->block)]
+                   [(_) (dict-set*! label->block
+                                    t-lbl t-instrs
+                                    e-lbl e-instrs)])
+     (values vars (IfStmt (Prim op es) (Goto t-lbl) (Goto e-lbl))))]
     [(Let x rhs body)
      (let-values ([(vars cont) (explicate-pred body t e vars label->block)])
        (explicate-assign rhs x cont vars label->block))]
     [(If c1 t1 e1)
-     (let ([then-lbl (gensym "block")]
-           [else-lbl (gensym "block")])
-       (let*-values ([(vars t-instrs) (explicate-pred t1 t e vars label->block)]
-                     [(_) (dict-set! label->block then-lbl t-instrs)]
-                     [(vars e-instrs) (explicate-pred e1 t e vars label->block)]
-                     [(_) (dict-set! label->block else-lbl e-instrs)])
-         (explicate-pred c1 then-lbl else-lbl vars label->block)))]
+     (let*-values ([(vars t) (explicate-pred t1 t e vars label->block)]
+                   [(vars e) (explicate-pred e1 t e vars label->block)])
+       (explicate-pred c1 t e vars label->block))]
     [else (error "explicate-pred passed non bool type expr : " c)]))
 
 (define (explicate-tail e vars label->block)
@@ -258,12 +268,7 @@
      (values vars
              (Return (Prim op es)))]
     [(If c t e)
-     (let ([then-lbl (gensym "block")]
-           [else-lbl (gensym "block")])
-       (let*-values ([(vars t-instrs) (explicate-tail t vars label->block)]
-                     [(vars e-instrs) (explicate-tail e vars label->block)]
-                     [(_) (dict-set*! label->block then-lbl t-instrs else-lbl e-instrs)])
-         (explicate-pred c then-lbl else-lbl vars label->block)))]
+     (explicate-pred c t e vars label->block)]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
 
 (define (explicate-assign e x cont vars label->block)
@@ -286,14 +291,11 @@
      (values vars
              (Seq (Assign (Var x) (Prim op es)) cont))]
     [(If c t e)
-     (let ([then-lbl (gensym "block")]
-           [else-lbl (gensym "block")])
-       (let*-values ([(vars cont-t) (explicate-assign t x cont vars label->block)]
-                     [(vars cont-e) (explicate-assign e x cont vars label->block)]
-                     [(_) (dict-set*! label->block then-lbl cont-t else-lbl cont-e)])
-         ; TODO : better way to handle variables? Each branch may introduce
-         ; different set of variables
-         (explicate-pred c then-lbl else-lbl vars label->block)))]
+     (let*-values ([(vars cont-t) (explicate-assign t x cont vars label->block)]
+                   [(vars cont-e) (explicate-assign e x cont vars label->block)])
+       ; XXX : better way to handle variables? Each branch may introduce
+       ; different set of variables
+       (explicate-pred c cont-t cont-e vars label->block))]
     [else (error "explicate-assign unhandled case" e)]))
 
 ;; explicate-control : R1 -> C0
