@@ -75,7 +75,7 @@
     [(Prim 'or `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
-       (If e1 (Bool #f) e2))]
+       (If e1 (Bool #t) e2))]
     [(Prim '< es) (Prim '< (shrink-exp es))]
     [(Prim 'eq? es) (Prim 'eq? (shrink-exp es))]
     [(Prim '<= `(,e1 ,e2))
