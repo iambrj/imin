@@ -63,9 +63,9 @@
     [(Prim '+ es) (Prim '+ (map shrink-exp es))]
     [(Prim '- `(,e))
      (let ([e (shrink-exp e)])
-       (Prim '- `(,(shrink-exp e))))]
+       (Prim '- `(,e)))]
     [(Prim 'read '()) (Prim 'read '())]
-    [(Prim 'and `(,e))
+    [(Prim 'not `(,e))
      (let ([e (shrink-exp e)])
        (Prim 'not `(,(shrink-exp e))))]
     [(Prim 'and `(,e1 ,e2))
@@ -77,7 +77,7 @@
            [e2 (shrink-exp e2)])
        (If e1 (Bool #t) e2))]
     [(Prim '< es) (Prim '< (shrink-exp es))]
-    [(Prim 'eq? es) (Prim 'eq? (shrink-exp es))]
+    [(Prim 'eq? es) (Prim 'eq? (map shrink-exp es))]
     [(Prim '<= `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
@@ -128,27 +128,27 @@
     [(Var v) #t]
     [else #f]))
 
-; atomic expression, new env
+; returns atomic expression, new env
 (define (rco-atm e)
   (match e
     [(Int i) (values (Int i) '())]
     [(Var v) (values (Var v) '())]
     [(Bool b) (values (Bool b) '())]
+    ; XXX : cleaner way to handle all Prims in one go? map a procedure that
+    ; returns multiple values?
     [(Prim 'read '())
      (let ([tmp (gensym 'tmp)]) (values tmp `((,tmp . ,(Prim 'read '())))))]
-    [(Prim '- `(,e1))
+    [(Prim op `(,e1)) #:when (member op '(- not))
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm atm->subexpr) (rco-atm e1)])
-         (values tmp (append atm->subexpr `((,tmp . ,(Prim '- `(,atm))))))))]
-    ; XXX : racket doesn't have dict-union (yet) :/, forced to
-    ; exploit dict representation
-    [(Prim '+ `(,e1 ,e2))
+         (values tmp (append atm->subexpr `((,tmp . ,(Prim op `(,atm))))))))]
+    [(Prim op `(,e1 ,e2)) #:when (member op '(eq? < +))
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
                     [(atm2 atm->subexpr2) (rco-atm e2)])
          (values tmp (append atm->subexpr1
                              atm->subexpr2
-                             `((,tmp . ,(Prim '+ `(,atm1 ,atm2))))))))]
+                             `((,tmp . ,(Prim op `(,atm1 ,atm2))))))))]
     [(If c t e)
      (let ([tmp (gensym 'tmp)])
        (values tmp `((,tmp . ,(If (rco-exp c) (rco-exp t) (rco-exp e))))))]
@@ -172,20 +172,16 @@
     [(Var v) (Var v)]
     [(Bool b) (Bool b)]
     [(Prim 'read '()) (Prim 'read '())]
-    [(Prim '- `(,e))
+    [(Prim op `(,e)) #:when (member op '(not -))
      (let-values ([(atm atm->expr) (rco-atm e)])
        (let ([atm (if (symbol? atm) (Var atm) atm)])
-         (make-lets atm->expr (Prim '- `(,atm)))))]
-    [(Prim '+ `(,e1 ,e2))
+         (make-lets atm->expr (Prim op `(,atm)))))]
+    [(Prim op `(,e1 ,e2)) #:when (member op '(eq? < +))
      (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
                   [(atm2 atm->subexpr2) (rco-atm e2)])
        (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
              [atm2 (if (symbol? atm2) (Var atm2) atm2)])
-         (make-lets (append atm->subexpr1 atm->subexpr2) (Prim '+ `(,atm1 ,atm2)))))]
-    [(Prim 'not `(,e))
-     (let-values ([(atm atm->expr) (rco-atm e)])
-       (let ([atm (if (symbol? atm) (Var atm) atm)])
-         (make-lets atm->expr (Prim '- `(,atm)))))]
+         (make-lets (append atm->subexpr1 atm->subexpr2) (Prim op `(,atm1 ,atm2)))))]
     [(If c t e)
      (If (rco-exp c) (rco-exp t) (rco-exp e))]
     [(Let x v b) (Let x (rco-exp v) (rco-exp b))]))
@@ -224,6 +220,7 @@
 ; TODO : add following test
 ; (if (if (if #t #f #t) #f #t) )
 (define (explicate-pred c t e label->block)
+  (printf "[ep] c : ~s\n t : ~s\n e : ~s\n label->block : ~s\n" c t e label->block)
   (match c
     [(Var x) (IfStmt (Prim 'eq? ((Var x) (Bool #t)))
                      (force (block->goto t label->block))
