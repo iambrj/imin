@@ -96,3 +96,19 @@ an executable program, do
 ```
 which will produce the executable program named a.out.
 
+## Interesting bugs so far
+
+- In the shrink pass, I had implemented `<=` as
+    ```
+    (match e
+      ...
+      [(Prim '<= `(,e1 ,e2))
+       (let ([e1 (shrink-exp e1)]
+             [e2 (shrink-exp e2)])
+         (If (Prim '< `(,e1 ,e2)) (Bool #t) (Prim 'eq? `(,e1 ,e2))))]
+      ...)
+    ```
+    how ever, this duplicates `e1` and `e2`! A compiler must *never* duplicate
+    code -- in this case, this duplication can introduce issues if either of
+    them are a `(read)` call, since the compiled program may potentially have to
+    read the file twice instead of once!
