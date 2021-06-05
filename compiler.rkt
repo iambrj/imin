@@ -76,7 +76,7 @@
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
        (If e1 (Bool #t) e2))]
-    [(Prim '< es) (Prim '< (shrink-exp es))]
+    [(Prim '< es) (Prim '< (map shrink-exp es))]
     [(Prim 'eq? es) (Prim 'eq? (map shrink-exp es))]
     [(Prim '<= `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
@@ -219,10 +219,11 @@
 ; (explicate-pred e1 B3 B4) => B5
 ; TODO : add following test
 ; (if (if (if #t #f #t) #f #t) )
+; whe t and e are forced, the generated blocks which are added to label->block
+; and then goto for that block is inserted
 (define (explicate-pred c t e label->block)
-  (printf "[ep] c : ~s\n t : ~s\n e : ~s\n label->block : ~s\n" c t e label->block)
   (match c
-    [(Var x) (IfStmt (Prim 'eq? ((Var x) (Bool #t)))
+    [(Var x) (IfStmt (Prim 'eq? `(,(Var x) ,(Bool #t)))
                      (force (block->goto t label->block))
                      (force (block->goto e label->block)))]
     [(Bool #t) (force (block->goto t label->block))]
@@ -237,10 +238,29 @@
      (let ([cont (delay (explicate-pred body t e label->block))])
        (explicate-assign rhs x cont label->block))]
     [(If c1 t1 e1)
-     (let*([t (delay (explicate-pred t1 t e label->block))]
-           [e (delay (explicate-pred e1 t e label->block))])
-       (explicate-pred c1 t e label->block))]
+     (let([t2 (delay (explicate-pred t1 t e label->block))]
+          [e2 (delay (explicate-pred e1 t e label->block))])
+       (explicate-pred c1 t2 e2 label->block))]
     [else (error "explicate-pred passed non bool type expr : " c)]))
+
+(define (explicate-assign e x cont label->block)
+  (match e
+    [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
+    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
+    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
+    [(Let y rhs body)
+     ; TODO : try passing cont to explicate-tail to avoid merge-conts
+     (let* ([cont1 (explicate-tail body label->block)]
+            [cont (merge-conts cont1 cont x)])
+       (explicate-assign rhs y cont label->block))]
+    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) (force cont))]
+    [(If c t e)
+     (let* ([cont-t (delay (explicate-assign t x cont label->block))]
+            [cont-e (delay (explicate-assign e x cont label->block))])
+       ; XXX : better way to handle variables? Each branch may introduce
+       ; different set of variables
+       (explicate-pred c cont-t cont-e label->block))]
+    [else (error "explicate-assign unhandled case" e)]))
 
 (define (explicate-tail e label->block)
   (match e
@@ -256,25 +276,6 @@
            [e (delay (explicate-tail e label->block))])
      (explicate-pred c t e label->block))]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
-
-(define (explicate-assign e x cont label->block)
-  (match e
-    [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
-    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
-    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
-    [(Let y rhs body)
-     ; TODO : try passing cont to explicate-tail to avoid merge-conts
-     (let* ([cont1 (explicate-tail body label->block)]
-            [cont (merge-conts cont1 cont x)])
-       (explicate-assign rhs y cont  label->block))]
-    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
-    [(If c t e)
-     (let* ([cont-t (delay (explicate-assign t x cont label->block))]
-            [cont-e (delay (explicate-assign e x cont label->block))])
-       ; XXX : better way to handle variables? Each branch may introduce
-       ; different set of variables
-       (explicate-pred c cont-t cont-e label->block))]
-    [else (error "explicate-assign unhandled case" e)]))
 
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)

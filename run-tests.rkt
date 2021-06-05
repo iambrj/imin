@@ -21,7 +21,7 @@
     ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rif ,type-check-Rif)
     ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
-    ("remove unused" ,remove-unused ,interp-Cif ,type-check-Cif)
+    ;("remove unused" ,remove-unused ,interp-Cif ,type-check-Cif)
     ))
 #;(define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
