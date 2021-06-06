@@ -294,52 +294,20 @@
      (let* ([label->block (make-hash)]
             [tail (explicate-tail body label->block)]
             [_ (dict-set! label->block 'start tail)])
-       (CProgram info label->block))]))
-
-(define ((add-edges-instr l g) i)
-  (match i
-    [(Goto l1) (add-edge! g l l1) g]
-    [(IfStmt _ (Goto l1) (Goto l2))
-     (add-edge! g l l1)
-     (add-edge! g l l2)
-     g]
-    [else g]))
-
-(define (add-edges b e g)
-  (match b
-    [(Assign _ e)
-     (add-edges b e g)]
-    #;[]))
-
-(define (remove-unused-blocks label->block)
-  (let*-values ([(g) (directed-graph '())]
-                [(_) (for ([l (hash-keys label->block)]) (add-vertex! g l))]
-                [(_) (hash-for-each label->block (lambda (l b) (add-edges b l g)))]
-                [(d p) (bfs g 'start)]
-                [(_) (hash-for-each p (lambda (v p)
-                                        (unless (= v 'start)
-                                          (unless (not (equal? p #f))
-                                            (remove-vertex! g v)))))]
-                [(alive) (get-vertices g)]
-                [(alive-lbs) (filter (lambda (p)
-                                       (member (car p) alive)) (hash->list label->block))])
-    (make-hash alive-lbs)))
-            
-; Remove dead blocks and create cfg
-(define (remove-unused p)
-  (match p
-    [(CProgram info label->block)
-     (CProgram info (remove-unused-blocks label->block))]))
+       (CProgram info (hash->list label->block)))]))
 
 (define (si-atm e)
   (match e
     [(Int n) (Imm n)]
     [(Var v) (Var v)]
+    [(Bool #f) (Imm 0)]
+    [(Bool #t) (Imm 1)]
     [else (error "si-atm passed non-atom expression : " e)]))
 
 (define (si-stmt e)
   (match e
     [(Assign (Var v) (Int i)) `(,(Instr 'movq `(,(Imm i) ,(Var v))))]
+    [(Assign (Var v) (Bool b)) `(,(Instr 'movq `(,(si-atm (Bool b)) ,(Var v))))]
     [(Assign (Var v) (Var u)) `(,(Instr 'movq `(,(Var u) ,(Var v))))]
     [(Assign (Var v) (Prim 'read '()))
      `(,(Callq `read_int 0)
@@ -358,6 +326,24 @@
          [(equal? (Var v) a2) `(,(Instr 'addq `(,(si-atm a1) ,(Var v))))]
          ; v = (+ a1 a2)
          [else `(,(Instr 'movq `(,a1 ,(Var v))) ,(Instr 'addq `(,a2 ,(Var v))))]))]
+    [(Assign (Var v) (Prim 'not `(,(Var v))))
+     `(,(Instr 'xorq `(,(Imm 1) ,(Var v))))]
+    [(Assign (Var v) (Prim 'not `(,a)))
+     (let ([a (si-atm a)])
+     `(,(Instr 'movq `(,a ,(Var v)))
+       ,(Instr 'xorq `(,(Imm 1) ,(Var v)))))]
+    [(Assign (Var v) (Prim 'eq? `(,a1 ,a2)))
+     (let ([a1 (si-atm a1)]
+           [a2 (si-atm a2)])
+       `(,(Instr 'cmpq `(,a2 ,a1))
+         ,(Instr 'set `(e ,(Reg 'al)))
+         ,(Instr 'movzbq `(,(Reg 'al) ,(Var v)))))]
+    [(Assign (Var v) (Prim '< `(,a1 ,a2)))
+     (let ([a1 (si-atm a1)]
+           [a2 (si-atm a2)])
+       `(,(Instr 'cmpq `(,a2 ,a1))
+         ,(Instr 'set `(l ,(Reg 'al)))
+         ,(Instr 'movzbq `(,(Reg 'al) ,(Var v)))))]
     [else (error "si-stmt passed non-statement expression : " e)]))
 
 (define (si-tail e)
@@ -370,18 +356,31 @@
     [(Return (Prim '- `(,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,a ,(Reg 'rax)))
-          ,(Instr 'negq `(,(Reg 'rax)))
-          ,(Jmp 'conclusion)))]
+         ,(Instr 'negq `(,(Reg 'rax)))
+         ,(Jmp 'conclusion)))]
     [(Return (Prim '+ `(,a1 ,a2)))
      (let ([a1 (si-atm a1)]
            [a2 (si-atm a2)])
        `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
-          ,(Instr 'addq `(,a2 ,(Reg 'rax)))
-          ,(Jmp 'conclusion)))]
+         ,(Instr 'addq `(,a2 ,(Reg 'rax)))
+         ,(Jmp 'conclusion)))]
     [(Seq stmt tail)
      (let ([s (si-stmt stmt)]
            [t (si-tail tail)])
        (append s t))]
+    [(Goto l) `(,(Jmp l))]
+    [(IfStmt (Prim 'eq? `(,a1 ,a2)) (Goto l1) (Goto l2))
+     (let ([a1 (si-atm a1)]
+           [a2 (si-atm a2)])
+       `(,(Instr 'cmpq `(,a2 ,a1))
+         ,(JmpIf 'e l1)
+         ,(Jmp l2)))]
+    [(IfStmt (Prim '< `(,a1 ,a2)) (Goto l1) (Goto l2))
+     (let ([a1 (si-atm a1)]
+           [a2 (si-atm a2)])
+       `(,(Instr 'cmpq `(,a2 ,a1))
+         ,(JmpIf 'l l1)
+         ,(Jmp l2)))]
     [else (error "si-tail passed non-tail expression : " e)]))
 
 ;; select-instructions : c0 -> [pseudo-x86]
