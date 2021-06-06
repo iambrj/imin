@@ -269,8 +269,6 @@
     [(If c t e)
      (let* ([cont-t (delay (explicate-assign t x cont label->block))]
             [cont-e (delay (explicate-assign e x cont label->block))])
-       ; XXX : better way to handle variables? Each branch may introduce
-       ; different set of variables
        (explicate-pred c cont-t cont-e label->block))]
     [else (error "explicate-assign unhandled case" e)]))
 
@@ -284,8 +282,8 @@
        (explicate-assign rhs x cont label->block))]
     [(Prim op es) (Return (Prim op es))]
     [(If c t e)
-     (let ([t1 (block->goto (explicate-tail t label->block) label->block)]
-           [e1 (block->goto (explicate-tail e label->block) label->block)])
+     (let ([t1 (block->goto (delay (explicate-tail t label->block)) label->block)]
+           [e1 (block->goto (delay (explicate-tail e label->block)) label->block)])
      (explicate-pred c t1 e1 label->block))]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
 
