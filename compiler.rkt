@@ -78,14 +78,26 @@
        (If e1 (Bool #t) e2))]
     [(Prim '< es) (Prim '< (map shrink-exp es))]
     [(Prim 'eq? es) (Prim 'eq? (map shrink-exp es))]
+    ; (<= e1 e2) == (or (< e1 e2) (eq? e1 e2))
+    ; Let bindings are creating to deal with (read)s
     [(Prim '<= `(,e1 ,e2))
-     (let ([e1 (shrink-exp e1)]
-           [e2 (shrink-exp e2)])
-       (If (Prim '< `(,e1 ,e2)) (Bool #t) (Prim 'eq? `(,e1 ,e2))))]
+     (let* ([v1 (gensym 'var)]
+            [v2 (gensym 'var)]
+            [e (Let v1 e1
+                    (Let v2 e2
+                         (Prim 'or `(,(Prim '< `(,v1 ,v2))
+                                     ,(Prim 'eq? `(,v1 ,v2))))))])
+       (shrink-exp e))]
+    ; (> e1 e2) == (not (or (< e1 e2) (eq? e1 e2)))
+    ; Let bindings are creating to deal with (read)s
     [(Prim '> `(,e1 ,e2))
-     (let ([e1 (shrink-exp e1)]
-           [e2 (shrink-exp e2)])
-       (If (Prim '< `(,e1 ,e2)) (Bool #f) (Bool #t)))]
+     (let* ([v1 (gensym 'var)]
+            [v2 (gensym 'var)]
+            [e (Let v1 e1
+                    (Let v2 e2
+                         (Prim 'not `(,(Prim 'or `(,(Prim '< `(,v1 ,v2))
+                                                   ,(Prim 'eq? `(,v1 ,v2))))))))])
+       (shrink-exp e))]
     [(Prim '>= `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
@@ -207,7 +219,7 @@
   (delay
     (let ([b (force b)])
       (match b
-        [(Goto label) (Goto label)]
+        [(Goto l) (Goto l)]
         [else (let ([l (gensym 'block)])
                 (dict-set! label->block l b)
                 (Goto l))]))))
@@ -253,7 +265,7 @@
      (let* ([cont1 (explicate-tail body label->block)]
             [cont (merge-conts cont1 cont x)])
        (explicate-assign rhs y cont label->block))]
-    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) (force cont))]
+    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) (force (block->goto cont label->block)))]
     [(If c t e)
      (let* ([cont-t (delay (explicate-assign t x cont label->block))]
             [cont-e (delay (explicate-assign e x cont label->block))])
@@ -272,9 +284,9 @@
        (explicate-assign rhs x cont label->block))]
     [(Prim op es) (Return (Prim op es))]
     [(If c t e)
-     (let ([t (delay (explicate-tail t label->block))]
-           [e (delay (explicate-tail e label->block))])
-     (explicate-pred c t e label->block))]
+     (let ([t1 (block->goto (explicate-tail t label->block) label->block)]
+           [e1 (block->goto (explicate-tail e label->block) label->block)])
+     (explicate-pred c t1 e1 label->block))]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
 
 ;; explicate-control : R1 -> C0
