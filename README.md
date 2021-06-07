@@ -2,9 +2,15 @@
 
 A compiler for (a subset of) Racket -> x86-64, written in Racket
 
+## TODO
+
+- Add tests that have nested `if`s in then/else positions
+- Add tests that have `if`s in assignments
+
 ## Resources
 
 - [x86-64 for the compiler writer](http://web.cecs.pdx.edu/~apt/cs491/x86-64.pdf)
+- [x86-64 cheatsheet](https://www.cs.cmu.edu/~fp/courses/15213-s07/misc/asm64-handout.pdf)
 - [Indiana University compiler course](https://iucompilercourse.github.io/IU-P423-P523-E313-E513-Fall-2020/)
 - [Original ICFP pearl on nanopass compilers](https://legacy.cs.indiana.edu/~dyb/pubs/nano-jfp.pdf)
 - [Andy Keep dissertation on nanopass compilers](http://andykeep.com/pubs/dissertation.pdf)
