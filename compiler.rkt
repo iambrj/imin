@@ -391,49 +391,36 @@
                                  `(,(car label-tail) . ,(Block '() (si-tail (cdr label-tail))))) label-tails)])
        (X86Program info label-blocks))]))
 
-(define ((ah-arg var->stk) atm)
-  (match atm
-    [(or (Reg _) (Imm _)) atm]
-    [(Var v)
-     (let ([p (assv v var->stk)])
-       (if p
-         (Deref 'rbp (cdr p))
-         (error "var ~s not allocated on stack : ~s\n" v var->stk)))]
-    [else (error "ah-arg passed non-atm expr : " atm)]))
-
-(define ((ah-instr var->stk) instr)
+(define ((add-edges-instr! g c) instr)
   (match instr
-    [(Instr op args)
-     (let ([args (map (ah-arg var->stk) args)])
-       (Instr op args))]
-    [_ instr]
-    [else (error "ah-instr passed non-instr expression : " instr)]))
+    [(Jmp l)
+     (add-directed-edge! g c l)]
+    [(JmpIf _ l)
+     (add-directed-edge! g c l)]
+    [else (void)]))
 
-(define ((ah-block var->stk) blk)
-  (match blk
+(define ((add-edges! g) label-block)
+  (match (cdr label-block)
     [(Block info instrs)
-     (let ([instrs (map (ah-instr var->stk) instrs)])
-       (Block info instrs))]))
+     (map (add-edges-instr! g (car label-block)) instrs)]
+    [else (error "add-edges! passed bad argument : " label-block)]))
 
-;; assign-homes : pseudo-x86 -> pseudo-x86
-(define (assign-homes p)
+(define (remove-jumps g label-blocks)
+  label-blocks)
+
+(define (build-cfg p)
   (match p
     [(X86Program info label-blocks)
-     (let* ([locals (assv 'locals info)]
-            [locals (if locals
-                      (cdr locals)
-                      '())]
-            [var->stk (foldr (lambda (var acc)
-                               (cons `(,var . ,(* -8 (+ 1 (index-of locals var)))) acc))
-                             '()
-                             locals)]
-            [label-blocks (map (lambda (label-block)
-                                 (cons (car label-block) ((ah-block var->stk) (cdr label-block))))
-                               label-blocks)]
-            [stack-space (if (empty? var->stk)
-                           0
-                           (round-frame (- (cdr (last var->stk)))))])
-       (X86Program (dict-set info 'stack-space stack-space) label-blocks))]))
+     (let* ([labels (dict-keys label-blocks)]
+            [g (directed-graph '())]
+            [_ (foldr (lambda (v acc)
+                        (add-vertex! g v))
+                      g
+                      labels)]
+            [_ (map (add-edges! g) label-blocks)]
+            [label-blocks (remove-jumps g label-blocks)])
+       (printf "DOT : ~s\n" (graphviz g))
+       (X86Program (dict-set info 'cfg g) label-blocks))]))
 
 (define (instr-w instr)
   (match instr
