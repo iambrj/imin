@@ -428,6 +428,8 @@
      (ul-arg a2)]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
     [(Instr 'cmpq _) (set)]
+    [(Jmp _) (set)]
+    [(JmpIf _ _) (set)]
     [(Callq _ _) (list->set caller-saved)]
     [else (error "instr-w missing case : " instr)]))
 
@@ -468,8 +470,9 @@
 (define (ul-block l blk label->liveafter)
   (match blk
     [(Block info instrs)
-     (let ([liveafter (ul-instrs (reverse instrs) `(,(set)) label->liveafter)])
-       (dict-set! label->liveafter l (car liveafter)))]
+     (let* ([liveafter (ul-instrs (reverse instrs) `(,(set)) label->liveafter)]
+            [_ (dict-set! label->liveafter l (car liveafter))])
+       (cons l (Block (dict-set info 'live-after liveafter) instrs)))]
     [else (error "ul-block passed non-block : " blk)]))
 
 (define (uncover-live p)
@@ -479,9 +482,11 @@
             ; conclusion is always last, remove it since not yet generated
             [order (cdr (tsort (transpose cfg)))]
             [label->liveafter (make-hash `((conclusion . ,(set 'rax 'rsp))))]
-            [_ (for ([label order]) (ul-block label
-                                              (dict-ref label-blocks label)
-                                              label->liveafter))])
+            [label-blocks (map (lambda (label)
+                                 (ul-block label
+                                           (dict-ref label-blocks label)
+                                           label->liveafter))
+                               order)])
        (X86Program info label-blocks))]))
 
 (define (bi-instr instr live-after g)
@@ -496,12 +501,11 @@
                       (unless (equal? v d) (add-edge! g d v)))])
             g)]))
 
-(define (bi-block blk)
+(define ((bi-block g) blk)
   (match blk
     [(Block info instrs)
      (let* ([live-after (dict-ref info 'live-after)]
             [vertices (apply set-union live-after)]
-            [g (undirected-graph '())]
             [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
             [_ (for ([i instrs] [la live-after]) (bi-instr i la g))])
        ; Return (Block (dict-set info 'conflicts g) instrs) instead if want
@@ -513,8 +517,8 @@
   ; more features
   (match p
     [(X86Program info label-blocks)
-     (let* ([start-block (dict-ref label-blocks 'start)]
-            [g (bi-block start-block)])
+     (let* ([g (undirected-graph '())]
+            [_ (map (compose (bi-block g) cdr) label-blocks)])
        (X86Program (dict-set info 'conflicts g) label-blocks))]))
 
 (define (min-free-list l)
