@@ -405,8 +405,10 @@
      (map (add-edges-instr! g (car label-block)) instrs)]
     [else (error "add-edges! passed bad argument : " label-block)]))
 
-(define (remove-jumps g label-blocks)
-  label-blocks)
+; (define (merge-blocks b1 b2)
+;   (match* b1 b2
+;     [((Block info1 l1) (Block info2 l2))
+;      (Block info1 (append instrs l))]))
 
 (define (build-cfg p)
   (match p
@@ -417,25 +419,28 @@
                         (add-vertex! g v))
                       g
                       labels)]
-            [_ (map (add-edges! g) label-blocks)]
-            [label-blocks (remove-jumps g label-blocks)])
-       (printf "DOT : ~s\n" (graphviz g))
+            [_ (map (add-edges! g) label-blocks)])
        (X86Program (dict-set info 'cfg g) label-blocks))]))
 
 (define (instr-w instr)
   (match instr
-    [(Instr _ `(,_ ,a2)) (ul-arg a2)]
+    [(Instr i `(,_ ,a2)) #:when (member i '(movq addq subq xorq movzbq set))
+     (ul-arg a2)]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
+    [(Instr 'cmpq _) (set)]
     [(Callq _ _) (list->set caller-saved)]
-    [else (set)]))
+    [else (error "instr-w missing case : " instr)]))
 
 (define (instr-r instr)
   (match instr
-    [(Instr (or 'addq 'subq) `(,a1 ,a2)) (set-union (ul-arg a1) (ul-arg a2))]
-    [(Instr 'movq `(,a1 ,_)) (ul-arg a1)]
+    [(Instr i `(,a1 ,a2)) #:when (member i '(addq subq xorq cmpq))
+     (set-union (ul-arg a1) (ul-arg a2))]
+    [(Instr i `(,a1 ,_)) #:when (member i '(movq subq movzbq))
+     (ul-arg a1)]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
+    [(Instr 'set _) (set)]
     [(Callq _ i) (list->set (take callee-saved i))]
-    [else (set)]))
+    [else (error "instr-r missing case : " instr)]))
 
 (define (ul-arg a)
   (match a
@@ -446,37 +451,37 @@
 ; Lafter(k) =  Lbefore(k - 1)
 ; Lbefore(k) = (Lafter(k) - W(k)) U R(k)
 ; Thus, Lafter(k) = Lafter(k + 1) - W(k) U R(k)
-(define (ul-instrs instrs after label->live)
+(define (ul-instrs instrs after label->liveafter)
   (match instrs
     ['() after]
-    [`(,(Jmp label) . ,t)
-      (let ([a (if (dict-has-key? label->live label)
-                 (dict-ref label->live label)
-                 (set))])
-        (ul-instrs t (cons (set-union a (car after)) after) label->live))]
+    [(or `(,(Jmp label) . ,t) `(,(JmpIf _ label) . ,t))
+     (let ([a (if (dict-has-key? label->liveafter label)
+                (dict-ref label->liveafter label)
+                (error "liveafter not built for Jmp " label))])
+       (ul-instrs t (cons (set-union a (car after)) after) label->liveafter))]
     [`(,i . ,t)
       (let ([w (instr-w i)]
             [r (instr-r i)]
             [a (car after)])
-        (ul-instrs t (cons (set-union (set-subtract a w) r) after) label->live))]))
+        (ul-instrs t (cons (set-union (set-subtract a w) r) after) label->liveafter))]))
 
-(define (ul-block blk)
+(define (ul-block l blk label->liveafter)
   (match blk
     [(Block info instrs)
-     (let* ([r (reverse instrs)]
-            ; XXX : ugly hardcoded label->live
-            [live-after
-              (ul-instrs r `(,(set)) `((conclusion . ,(set (Reg 'rax) (Reg 'rsp)))))])
-       (Block (dict-set* info 'live-after live-after 'label->live `((conclusion . ,(set 'rax 'rsp))))
-              instrs))]))
+     (let ([liveafter (ul-instrs (reverse instrs) `(,(set)) label->liveafter)])
+       (dict-set! label->liveafter l (car liveafter)))]
+    [else (error "ul-block passed non-block : " blk)]))
 
 (define (uncover-live p)
   (match p
     [(X86Program info label-blocks)
-     (let ([label-blocks (map (lambda (label-block)
-                                (cons (car label-block)
-                                      (ul-block (cdr label-block))))
-                              label-blocks)])
+     (let* ([cfg (dict-ref info 'cfg)]
+            ; conclusion is always last, remove it since not yet generated
+            [order (cdr (tsort (transpose cfg)))]
+            [label->liveafter (make-hash `((conclusion . ,(set 'rax 'rsp))))]
+            [_ (for ([label order]) (ul-block label
+                                              (dict-ref label-blocks label)
+                                              label->liveafter))])
        (X86Program info label-blocks))]))
 
 (define (bi-instr instr live-after g)
@@ -785,4 +790,8 @@
          [vertex->node (map (lambda (v) (cons v (pqueue-push! q v))) w)])
     (color-graph g q w v->s vertex->node)))
 
+(define p1-cfg
+  (match (build-cfg p1)
+    [(X86Program info label-blocks)
+     (dict-ref info 'cfg)]))
 |#
