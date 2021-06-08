@@ -49,6 +49,14 @@
   (match p
     [(Program info e) (Program info (pe-exp e))]))
 
+(define (shrink-reads e var->expr)
+  (match e
+    [(Prim 'read '())
+     (let ([var (gensym 'var)])
+       (values var (dict-set var->expr var (Prim 'read '()))))]
+    [else
+      (values e var->expr)]))
+
 (define (shrink-exp e)
   (match e
     [(Int i) (Int i)]
@@ -81,22 +89,26 @@
     ; (<= e1 e2) == (or (< e1 e2) (eq? e1 e2))
     ; Let bindings are creating to deal with (read)s
     [(Prim '<= `(,e1 ,e2))
-     (let* ([v1 (gensym 'var)]
-            [v2 (gensym 'var)]
-            [e (Let v1 e1
-                    (Let v2 e2
-                         (Prim 'or `(,(Prim '< `(,v1 ,v2))
-                                     ,(Prim 'eq? `(,v1 ,v2))))))])
+     (let*-values ([(e1 var->expr) (shrink-reads e1 '())]
+                   [(e2 var->expr) (shrink-reads e2 var->expr)]
+                   [(e1) (shrink-exp (if (symbol? e1) (Var e1) e1))]
+                   [(e2) (shrink-exp (if (symbol? e2) (Var e2) e2))]
+
+                   [(e) (Prim 'or `(,(Prim '< `(,e1 ,e2))
+                                     ,(Prim 'eq? `(,e1 ,e2))))]
+                   [(e) (build-lets var->expr e)])
        (shrink-exp e))]
     ; (> e1 e2) == (not (or (< e1 e2) (eq? e1 e2)))
     ; Let bindings are creating to deal with (read)s
     [(Prim '> `(,e1 ,e2))
-     (let* ([v1 (gensym 'var)]
-            [v2 (gensym 'var)]
-            [e (Let v1 e1
-                    (Let v2 e2
-                         (Prim 'not `(,(Prim 'or `(,(Prim '< `(,v1 ,v2))
-                                                   ,(Prim 'eq? `(,v1 ,v2))))))))])
+     (let*-values ([(e1 var->expr) (shrink-reads e1 '())]
+                   [(e2 var->expr) (shrink-reads e2 var->expr)]
+                   [(e1) (shrink-exp (if (symbol? e1) (Var e1) e1))]
+                   [(e2) (shrink-exp (if (symbol? e2) (Var e2) e2))]
+
+                   [(e) (Prim 'not `(,(Prim 'or `(,(Prim '< `(,e1 ,e2))
+                                                   ,(Prim 'eq? `(,e1 ,e2))))))]
+                   [(e) (build-lets var->expr e)])
        (shrink-exp e))]
     [(Prim '>= `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
@@ -172,11 +184,12 @@
          (let ([tmp (gensym 'tmp)])
            (values tmp `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
 
+; XXX : make-lets vs build-lets (?)
 (define (build-lets var->expr* body)
   (match var->expr*
     ['() body]
     [`((,var . ,expr) . ,d)
-      (Let var expr (make-lets d body))]))
+      (Let var expr (build-lets d body))]))
 
 (define (rco-exp e)
   (match e
@@ -187,13 +200,13 @@
     [(Prim op `(,e)) #:when (member op '(not -))
      (let-values ([(atm atm->expr) (rco-atm e)])
        (let ([atm (if (symbol? atm) (Var atm) atm)])
-         (make-lets atm->expr (Prim op `(,atm)))))]
+         (build-lets atm->expr (Prim op `(,atm)))))]
     [(Prim op `(,e1 ,e2)) #:when (member op '(eq? < +))
      (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
                   [(atm2 atm->subexpr2) (rco-atm e2)])
        (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
              [atm2 (if (symbol? atm2) (Var atm2) atm2)])
-         (make-lets (append atm->subexpr1 atm->subexpr2) (Prim op `(,atm1 ,atm2)))))]
+         (build-lets (append atm->subexpr1 atm->subexpr2) (Prim op `(,atm1 ,atm2)))))]
     [(If c t e)
      (If (rco-exp c) (rco-exp t) (rco-exp e))]
     [(Let x v b) (Let x (rco-exp v) (rco-exp b))]))
@@ -255,37 +268,46 @@
        (explicate-pred c1 t2 e2 label->block))]
     [else (error "explicate-pred passed non bool type expr : " c)]))
 
-(define (explicate-assign e x cont label->block)
-  (match e
-    [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
-    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
-    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
-    [(Let y rhs body)
-     ; TODO : try passing cont to explicate-tail to avoid merge-conts
-     (let* ([cont1 (explicate-tail body label->block)]
-            [cont (merge-conts cont1 cont x)])
-       (explicate-assign rhs y cont label->block))]
-    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) (force (block->goto cont label->block)))]
-    [(If c t e)
-     (let* ([cont-t (delay (explicate-assign t x cont label->block))]
-            [cont-e (delay (explicate-assign e x cont label->block))])
-       (explicate-pred c cont-t cont-e label->block))]
-    [else (error "explicate-assign unhandled case" e)]))
+(define (explicate-assign rhs x cont label->block)
+  (let ([cont (force (block->goto cont label->block))])
+    (match rhs
+      [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
+      [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
+      [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
+      [(Let y rhs body)
+       ; TODO : try passing cont to explicate-tail to avoid merge-conts
+       (let* ([cont1 (explicate-tail body label->block)]
+              [cont (merge-conts cont1 cont x)])
+         (explicate-assign rhs y cont label->block))]
+      [(Prim op es)
+       (Seq (Assign (Var x) (Prim op es))
+            cont)]
+      [(If c t e)
+       (let* ([cont-t (delay (explicate-assign t x cont label->block))]
+              [cont-e (delay (explicate-assign e x cont label->block))])
+         (explicate-pred c cont-t cont-e label->block))]
+      [else (error "explicate-assign unhandled case" rhs)])))
+
+; (begin e1 ... en)
+; (delay e1 ... en) -> (force (delay (begin e1 ... en)))
 
 (define (explicate-tail e label->block)
   (match e
     [(Var x) (Return (Var x))]
     [(Bool b) (Return (Bool b))]
     [(Int n) (Return (Int n))]
+    [(Prim op es) (Return (Prim op es))]
     [(Let x rhs body)
      (let* ([cont (explicate-tail body label->block)])
        (explicate-assign rhs x cont label->block))]
-    [(Prim op es) (Return (Prim op es))]
     [(If c t e)
      (let ([t1 (block->goto (delay (explicate-tail t label->block)) label->block)]
            [e1 (block->goto (delay (explicate-tail e label->block)) label->block)])
      (explicate-pred c t1 e1 label->block))]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
+; (delay e1 e2 ... en) -> promise p
+; (force p) -> (eval en)
+
 
 ;; explicate-control : R1 -> C0
 (define (explicate-control p)
@@ -420,6 +442,7 @@
                       g
                       labels)]
             [_ (map (add-edges! g) label-blocks)])
+       (printf "CFG : ~s\n" (graphviz g))
        (X86Program (dict-set info 'cfg g) label-blocks))]))
 
 (define (instr-w instr)
@@ -653,6 +676,9 @@
     [(Instr op `(,(Deref 'rbp x) ,(Deref 'rbp y)))
      `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
         ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
+    [(Instr 'cmpq `(,a1 ,(Imm i)))
+     `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
+        ,(Instr 'cmpq  `(,a1 ,(Reg 'rax))))]
     [_ `(,instr)]))
 
 (define (pi-block blk)
@@ -694,13 +720,22 @@
 
 (define (print-x86-instr instr)
   (match instr
-    [(Instr op args)
-     (string-append (symbol->string op) " "
-                    (print-x86-args args))]
     [(Callq l i) (string-append "callq "
                                 (symbol->string l))]
     [(Retq) "retq"]
-    [(Jmp l) (string-append "jmp " (symbol->string l) "\n")]))
+    [(Jmp l) (string-append "jmp " (symbol->string l))]
+    [(JmpIf cc l) (string-append "j"
+                                 (symbol->string cc)
+                                 " "
+                                 (symbol->string l))]
+    [(Instr 'set `(,cc ,r))
+     (string-append "set"
+                    (symbol->string cc)
+                    " "
+                    (print-x86-arg r))]
+    [(Instr op args)
+     (string-append (symbol->string op) " "
+                    (print-x86-args args))]))
 
 (define (print-x86-block blk)
   (match blk
@@ -798,4 +833,84 @@
   (match (build-cfg p1)
     [(X86Program info label-blocks)
      (dict-ref info 'cfg)]))
+
+(define p1 (X86Program
+ (list
+  '(locals-types (tmp27355 . Integer) (tmp27356 . Integer))
+  '(stack-space . 0)
+  (list
+   'var->mem
+   (cons (Reg 'rdx) (Reg 'rdx))
+   (cons (Reg 'rcx) (Reg 'rcx))
+   (cons (Reg 'r9) (Reg 'r9))
+   (cons (Reg 'rdi) (Reg 'rdi))
+   (cons (Reg 'r10) (Reg 'r10))
+   (cons (Reg 'r8) (Reg 'r8))
+   (cons (Reg 'rsi) (Reg 'rsi))
+   (cons (Reg 'r11) (Reg 'r11))
+   (cons (Reg 'rax) (Reg 'rax))
+   (cons (Var 'tmp27355) (Reg 'rax))
+   (cons (Var 'tmp27356) (Reg 'rax)))
+  '(used-callee))
+ (list
+  (cons
+   'block27358
+   (Block
+    (list (list 'live-after (set 'rax 'rsp) (set 'rax 'rsp) (set)))
+    (list (Instr 'movq (list (Imm 42) (Reg 'rax))) (Jmp 'conclusion))))
+  (cons
+   'block27357
+   (Block
+    (list (list 'live-after (set 'rax 'rsp) (set 'rax 'rsp) (set)))
+    (list (Instr 'movq (list (Imm 0) (Reg 'rax))) (Jmp 'conclusion))))
+  (cons
+   'block27359
+   (Block
+    (list
+     (list
+      'live-after
+      (set 'rax (Var 'tmp27356) 'rsp)
+      (set 'rax 'rsp)
+      (set 'rax 'rsp)
+      (set)))
+    (list
+     (Instr 'cmpq (list (Imm 1) (Reg 'rax)))
+     (JmpIf 'e 'block27357)
+     (Jmp 'block27358))))
+  (cons
+   'block27360
+   (Block
+    (list
+     (list
+      'live-after
+      (set 'rax 'rsp)
+      (set 'rsp 'rax (Reg 'rax))
+      (set 'rax (Var 'tmp27356) 'rsp)
+      (set)))
+    (list (Callq 'read_int 0) (Jmp 'block27359))))
+  (cons
+   'block27361
+   (Block
+    (list
+     (list
+      'live-after
+      (set 'rax (Var 'tmp27355) 'rsp)
+      (set 'rax 'rsp)
+      (set 'rax 'rsp)
+      (set)))
+    (list
+     (Instr 'cmpq (list (Imm 0) (Reg 'rax)))
+     (JmpIf 'e 'block27360)
+     (Jmp 'block27358))))
+  (cons
+   'start
+   (Block
+    (list
+     (list
+      'live-after
+      (set 'rax 'rsp)
+      (set 'rsp 'rax (Reg 'rax))
+      (set 'rax (Var 'tmp27355) 'rsp)
+      (set)))
+    (list (Callq 'read_int 0) (Jmp 'block27361)))))))
 |#

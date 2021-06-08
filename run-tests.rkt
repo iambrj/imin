@@ -26,17 +26,7 @@
     ("uncover live" ,uncover-live ,interp-pseudo-x86-1)
     ("build interference" ,build-interference ,interp-pseudo-x86-1)
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-1)
-    ))
-#;(define passes
-  `( ("uniquify" ,uniquify ,interp-Rvar)
-    ("remove complex opera*" ,remove-complex-opera* ,interp-Rvar)
-    ("explicate control" ,explicate-control ,interp-Cvar)
-    ("instruction selection" ,select-instructions ,interp-x86-0)
-    ; ("assign homes" ,assign-homes ,interp-x86-0)
-    ("uncover live" ,uncover-live ,interp-x86-0)
-    ("build interference" ,build-interference ,interp-x86-0)
-    ("allocate registers" ,allocate-registers ,interp-x86-0)
-    ("patch instructions" ,patch-instructions ,interp-x86-0)
+    ("patch instructions" ,patch-instructions ,interp-pseudo-x86-1)
     ("print x86" ,print-x86 #f)))
 
 ;; all the files in the tests/ directory with extension ".rkt".
@@ -59,4 +49,4 @@
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-; (compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
+(compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
