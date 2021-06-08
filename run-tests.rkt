@@ -21,7 +21,11 @@
     ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rif ,type-check-Rif)
     ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
-    ;("remove unused" ,remove-unused ,interp-Cif ,type-check-Cif)
+    ("select instructions" ,select-instructions ,interp-pseudo-x86-1)
+    ("build cfg" ,build-cfg ,interp-pseudo-x86-1)
+    ("uncover live" ,uncover-live ,interp-pseudo-x86-1)
+    ("build interference" ,build-interference ,interp-pseudo-x86-1)
+    ("allocate registers" ,allocate-registers ,interp-pseudo-x86-1)
     ))
 #;(define passes
   `( ("uniquify" ,uniquify ,interp-Rvar)
