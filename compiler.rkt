@@ -414,10 +414,16 @@
        (printf "CFG : ~s\n" (graphviz g))
        (X86Program (dict-set info 'cfg g) label-blocks))]))
 
+; XXX : hardocded to al, will have to change if other registers are used
+(define (byte->reg a)
+  (match a
+    [(Reg 'al) (Reg 'rax)]
+    [_ a]))
+
 (define (instr-w instr)
   (match instr
     [(Instr i `(,_ ,a2)) #:when (member i '(movq addq subq xorq movzbq set))
-     (ul-arg a2)]
+     (ul-arg (byte->reg a2))]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
     [(Instr 'cmpq _) (set)]
     [(Jmp _) (set)]
@@ -438,8 +444,8 @@
 
 (define (ul-arg a)
   (match a
-    [(or (Var _) (Reg _)) (set a)]
-    [_ (set)]))
+    [(or (Var _) (Reg _)) (set (byte->reg a))]
+    [(or (Bool _) (Int _) (Imm _)) (set)]))
 
 ; Lafter(n) = {}
 ; Lafter(k) =  Lbefore(k - 1)
@@ -473,7 +479,7 @@
      (let* ([cfg (dict-ref info 'cfg)]
             ; conclusion is always last, remove it since not yet generated
             [order (cdr (tsort (transpose cfg)))]
-            [label->liveafter (make-hash `((conclusion . ,(set 'rax 'rsp))))]
+            [label->liveafter (make-hash `((conclusion . ,(set (Reg 'rax) (Reg 'rsp)))))]
             [label-blocks (map (lambda (label)
                                  (ul-block label
                                            (dict-ref label-blocks label)
