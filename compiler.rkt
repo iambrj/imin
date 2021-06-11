@@ -49,14 +49,6 @@
   (match p
     [(Program info e) (Program info (pe-exp e))]))
 
-(define (shrink-reads e var->expr)
-  (match e
-    [(Prim 'read '())
-     (let ([var (gensym 'var)])
-       (values var (dict-set var->expr var (Prim 'read '()))))]
-    [else
-      (values e var->expr)]))
-
 (define (shrink-exp e)
   (match e
     [(Int i) (Int i)]
@@ -75,53 +67,43 @@
     [(Prim 'read '()) (Prim 'read '())]
     [(Prim 'not `(,e))
      (let ([e (shrink-exp e)])
-       (Prim 'not `(,(shrink-exp e))))]
+       (Prim 'not `(,e)))]
+    ; (and e1 e1) == (if e1 e2 #f)
     [(Prim 'and `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
        (If e1 e2 (Bool #f)))]
+    ; (or e1 e1) == (if e1 #t e2)
     [(Prim 'or `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
        (If e1 (Bool #t) e2))]
     [(Prim '< es) (Prim '< (map shrink-exp es))]
     [(Prim 'eq? es) (Prim 'eq? (map shrink-exp es))]
-    ; (<= e1 e2) == (or (< e1 e2) (eq? e1 e2))
-    ; Let bindings are creating to deal with (read)s
-    [(Prim '<= `(,e1 ,e2))
-     (let*-values ([(e1 var->expr) (shrink-reads e1 '())]
-                   [(e2 var->expr) (shrink-reads e2 var->expr)]
-                   [(e1) (shrink-exp (if (symbol? e1) (Var e1) e1))]
-                   [(e2) (shrink-exp (if (symbol? e2) (Var e2) e2))]
-
-                   [(e) (Prim 'or `(,(Prim '< `(,e1 ,e2))
-                                     ,(Prim 'eq? `(,e1 ,e2))))]
-                   [(e) (build-lets var->expr e)])
-       (shrink-exp e))]
-    ; (> e1 e2) == (not (or (< e1 e2) (eq? e1 e2)))
-    ; Let bindings are creating to deal with (read)s
-    [(Prim '> `(,e1 ,e2))
-     (let*-values ([(e1 var->expr) (shrink-reads e1 '())]
-                   [(e2 var->expr) (shrink-reads e2 var->expr)]
-                   [(e1) (shrink-exp (if (symbol? e1) (Var e1) e1))]
-                   [(e2) (shrink-exp (if (symbol? e2) (Var e2) e2))]
-
-                   [(e) (Prim 'not `(,(Prim 'or `(,(Prim '< `(,e1 ,e2))
-                                                   ,(Prim 'eq? `(,e1 ,e2))))))]
-                   [(e) (build-lets var->expr e)])
-       (shrink-exp e))]
+    ; (>= e1 e2) == (not (< e1 e2))
     [(Prim '>= `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
-       (Prim 'not `(,(Prim `< `(,e1 ,e2)))))]))
+       (Prim 'not `(,(Prim `< `(,e1 ,e2)))))]
+    ; (<= e1 e2) == (let ([tmp e1]) (not (< e2 tmp)))
+    ; tmp needed to enforce order of evaluation
+    [(Prim '<= `(,e1 ,e2))
+     (let ([v (gensym 'tmp)])
+       (shrink-exp
+         (Let v
+              e1
+              (Prim 'not
+                    `(,(Prim '<
+                             `(,e2 ,(Var v))))))))]
+    ; (> e1 e2) == (not (<= e1 e2))
+    [(Prim '> `(,e1 ,e2))
+     (let ([e (Prim 'not `(,(Prim '<= `(,e1 ,e2))))])
+       (shrink-exp e))]))
 
 (define (shrink p)
   (match p
     [(Program info e)
      (Program info (shrink-exp e))]))
-
-; uniquify-exp -> remove-complex-opera* -> explicate-control ->
-; select-instructions -> assign-homes -> patch-instructions -> print x86
 
 (define ((uniquify-exp env) e)
   (match e
@@ -141,7 +123,6 @@
     [(Prim op es)
      (Prim op (for/list ([e es]) ((uniquify-exp env) e)))]))
 
-;; uniquify : R1 -> R1
 (define (uniquify p)
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
@@ -170,9 +151,11 @@
      (let ([tmp (gensym 'tmp)])
        (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
                     [(atm2 atm->subexpr2) (rco-atm e2)])
-         (values tmp (append atm->subexpr1
-                             atm->subexpr2
-                             `((,tmp . ,(Prim op `(,atm1 ,atm2))))))))]
+         (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
+               [atm2 (if (symbol? atm2) (Var atm2) atm2)])
+           (values tmp (append atm->subexpr1
+                               atm->subexpr2
+                               `((,tmp . ,(Prim op `(,atm1 ,atm2)))))))))]
     [(If c t e)
      (let ([tmp (gensym 'tmp)])
        (values tmp `((,tmp . ,(If (rco-exp c) (rco-exp t) (rco-exp e))))))]
@@ -184,7 +167,6 @@
          (let ([tmp (gensym 'tmp)])
            (values tmp `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
 
-; XXX : make-lets vs build-lets (?)
 (define (build-lets var->expr* body)
   (match var->expr*
     ['() body]
@@ -211,15 +193,15 @@
      (If (rco-exp c) (rco-exp t) (rco-exp e))]
     [(Let x v b) (Let x (rco-exp v) (rco-exp b))]))
 
-;; remove-complex-opera* : R1 -> R1
-;; arguments of operations are atomic
+; arguments of operations are atomic
 (define (remove-complex-opera* p)
   (match p
     [(Program info e)
      (Program info (rco-exp e))]))
 
-; c1 : Assign, Assign, ..., Ret
-; c2 : Assign, Assign, ..., Ret
+; c1 = Assign_1, Assign_2, ..., Assign_k, Ret1
+; c2 = Assign_(k + 1), ..., Ret2
+; x =  Assign_1, Assign_2, ..., Assign_k, Assign_(k + 1), ..., Ret2
 (define (merge-conts c1 c2 x)
   (match c1
     [(Return v)
@@ -242,8 +224,6 @@
 ; (explicate-pred e2 (goto l1) (goto l2)) => B3
 ; (explicate-pred e3 (goto l1) (goto l2)) => B4
 ; (explicate-pred e1 B3 B4) => B5
-; TODO : add following test
-; (if (if (if #t #f #t) #f #t) )
 ; whe t and e are forced, the generated blocks which are added to label->block
 ; and then goto for that block is inserted
 (define (explicate-pred c t e label->block)
@@ -288,9 +268,6 @@
          (explicate-pred c cont-t cont-e label->block))]
       [else (error "explicate-assign unhandled case" rhs)])))
 
-; (begin e1 ... en)
-; (delay e1 ... en) -> (force (delay (begin e1 ... en)))
-
 (define (explicate-tail e label->block)
   (match e
     [(Var x) (Return (Var x))]
@@ -305,11 +282,8 @@
            [e1 (block->goto (delay (explicate-tail e label->block)) label->block)])
      (explicate-pred c t1 e1 label->block))]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
-; (delay e1 e2 ... en) -> promise p
-; (force p) -> (eval en)
 
-
-;; explicate-control : R1 -> C0
+; explicate-control : R1 -> C0
 (define (explicate-control p)
   (match p
     [(Program info body)
@@ -405,7 +379,7 @@
          ,(Jmp l2)))]
     [else (error "si-tail passed non-tail expression : " e)]))
 
-;; select-instructions : c0 -> [pseudo-x86]
+; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
   (match p
     [(CProgram info label-tails)
@@ -426,11 +400,6 @@
     [(Block info instrs)
      (map (add-edges-instr! g (car label-block)) instrs)]
     [else (error "add-edges! passed bad argument : " label-block)]))
-
-; (define (merge-blocks b1 b2)
-;   (match* b1 b2
-;     [((Block info1 l1) (Block info2 l2))
-;      (Block info1 (append instrs l))]))
 
 (define (build-cfg p)
   (match p
