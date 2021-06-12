@@ -292,6 +292,13 @@
             [_ (dict-set! label->block 'start tail)])
        (CProgram info (hash->list label->block)))]))
 
+; second argument of cmp cannot be an immediate, generate temorary mov if it is
+(define (cmp-tmp-mov a)
+  (match (si-atm a)
+    [(Imm a)
+     (values `(,(Instr 'movq `(,(Imm a) ,(Reg 'rax)))) (Reg 'rax))]
+    [_ (values '() a)]))
+
 (define (si-atm e)
   (match e
     [(Int n) (Imm n)]
@@ -329,17 +336,19 @@
      `(,(Instr 'movq `(,a ,(Var v)))
        ,(Instr 'xorq `(,(Imm 1) ,(Var v)))))]
     [(Assign (Var v) (Prim 'eq? `(,a1 ,a2)))
-     (let ([a1 (si-atm a1)]
-           [a2 (si-atm a2)])
-       `(,(Instr 'cmpq `(,a2 ,a1))
-         ,(Instr 'set `(e ,(Reg 'al)))
-         ,(Instr 'movzbq `(,(Reg 'al) ,(Var v)))))]
+     (let-values ([(tmp a1) (cmp-tmp-mov a1)]
+                  [(a2) (si-atm a2)])
+       (append tmp
+               `(,(Instr 'cmpq `(,a2 ,a1))
+                  ,(Instr 'set `(e ,(Reg 'al)))
+                  ,(Instr 'movzbq `(,(Reg 'al) ,(Var v))))))]
     [(Assign (Var v) (Prim '< `(,a1 ,a2)))
-     (let ([a1 (si-atm a1)]
-           [a2 (si-atm a2)])
-       `(,(Instr 'cmpq `(,a2 ,a1))
-         ,(Instr 'set `(l ,(Reg 'al)))
-         ,(Instr 'movzbq `(,(Reg 'al) ,(Var v)))))]
+     (let-values ([(tmp a1)  (cmp-tmp-mov a1)]
+                  [(a2) (si-atm a2)])
+       (append tmp
+               `(,(Instr 'cmpq `(,a2 ,a1))
+                  ,(Instr 'set `(l ,(Reg 'al)))
+                  ,(Instr 'movzbq `(,(Reg 'al) ,(Var v))))))]
     [else (error "si-stmt passed non-statement expression : " e)]))
 
 (define (si-tail e)
@@ -366,17 +375,19 @@
        (append s t))]
     [(Goto l) `(,(Jmp l))]
     [(IfStmt (Prim 'eq? `(,a1 ,a2)) (Goto l1) (Goto l2))
-     (let ([a1 (si-atm a1)]
-           [a2 (si-atm a2)])
-       `(,(Instr 'cmpq `(,a2 ,a1))
-         ,(JmpIf 'e l1)
-         ,(Jmp l2)))]
+     (let-values ([(tmp a1) (cmp-tmp-mov a1)]
+                  [(a2) (si-atm a2)])
+       (append tmp
+               `(,(Instr 'cmpq `(,a2 ,a1))
+                  ,(JmpIf 'e l1)
+                  ,(Jmp l2))))]
     [(IfStmt (Prim '< `(,a1 ,a2)) (Goto l1) (Goto l2))
-     (let ([a1 (si-atm a1)]
-           [a2 (si-atm a2)])
-       `(,(Instr 'cmpq `(,a2 ,a1))
-         ,(JmpIf 'l l1)
-         ,(Jmp l2)))]
+     (let-values ([(tmp a1) (cmp-tmp-mov a1)]
+                  [(a2) (si-atm a2)])
+       (append tmp
+               `(,(Instr 'cmpq `(,a2 ,a1))
+                  ,(JmpIf 'l l1)
+                  ,(Jmp l2))))]
     [else (error "si-tail passed non-tail expression : " e)]))
 
 ; select-instructions : C0 -> pseudo-x86
@@ -649,11 +660,9 @@
 (define (pi-instr instr)
   (match instr
     [(Instr op `(,(Deref 'rbp x) ,(Deref 'rbp y)))
+     ; What if rax is live at this point!?
      `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
         ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
-    [(Instr 'cmpq `(,a1 ,(Imm i)))
-     `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
-        ,(Instr 'cmpq  `(,a1 ,(Reg 'rax))))]
     [_ `(,instr)]))
 
 (define (pi-block blk)
@@ -764,128 +773,3 @@
                                  ""
                                  label-blocks)])
        (string-append label-blocks main conclusion))]))
-
-#|
-(define v->m (list (cons (Var 'x18487) (Reg 'rbx)) (cons (Var 'x18488) (Reg 'rax))))
-
-(define b
-  (Block '()
-         `(,(Instr 'movq `(,(Imm 1) ,(Var 'v)))
-            ,(Instr 'movq `(,(Imm 42) ,(Var 'w)))
-            ,(Instr 'movq `(,(Var 'v) ,(Var 'x)))
-            ,(Instr 'addq `(,(Imm 7) ,(Var 'x)))
-            ,(Instr 'movq `(,(Var 'x) ,(Var 'y)))
-            ,(Instr 'movq `(,(Var 'x) ,(Var 'z)))
-            ,(Instr 'addq `(,(Var 'w) ,(Var 'z)))
-            ,(Instr 'movq `(,(Var 'y) ,(Var 't)))
-            ,(Instr 'negq `(,(Var 't)))
-            ,(Instr 'movq `(,(Var 'z) ,(Reg 'rax)))
-            ,(Instr 'movq `(,(Var 't) ,(Reg 'rax)))
-            ,(Jmp 'conclusion))))
-
-(define b1
-  (Block
-    '()
-    (list
-     (Instr 'movq (list (Imm 20) (Var 'x18487)))
-     (Instr 'movq (list (Imm 0) (Var 'x18488)))
-     (Instr 'addq (list (Imm 22) (Var 'x18488)))
-     (Instr 'movq (list (Var 'x18487) (Reg 'rax)))
-     (Instr 'addq (list (Var 'x18488) (Reg 'rax)))
-     (Jmp 'conclusion))))
-
-(define (color-block b)
-  (let* ([g (bi-block (ul-block b))]
-         [w (filter Var? (get-vertices g))]
-         [v->s (make-hash (foldr (lambda (x a)
-                                   (cons `(,x . ,(set)) a)) '() w))]
-         [q (make-pqueue (lambda (x1 x2)
-                           (> (set-count (dict-ref v->s x1)) (set-count (dict-ref v->s x2)))))]
-         [vertex->node (map (lambda (v) (cons v (pqueue-push! q v))) w)])
-    (color-graph g q w v->s vertex->node)))
-
-(define p1-cfg
-  (match (build-cfg p1)
-    [(X86Program info label-blocks)
-     (dict-ref info 'cfg)]))
-
-(define p1 (X86Program
- (list
-  '(locals-types (tmp27355 . Integer) (tmp27356 . Integer))
-  '(stack-space . 0)
-  (list
-   'var->mem
-   (cons (Reg 'rdx) (Reg 'rdx))
-   (cons (Reg 'rcx) (Reg 'rcx))
-   (cons (Reg 'r9) (Reg 'r9))
-   (cons (Reg 'rdi) (Reg 'rdi))
-   (cons (Reg 'r10) (Reg 'r10))
-   (cons (Reg 'r8) (Reg 'r8))
-   (cons (Reg 'rsi) (Reg 'rsi))
-   (cons (Reg 'r11) (Reg 'r11))
-   (cons (Reg 'rax) (Reg 'rax))
-   (cons (Var 'tmp27355) (Reg 'rax))
-   (cons (Var 'tmp27356) (Reg 'rax)))
-  '(used-callee))
- (list
-  (cons
-   'block27358
-   (Block
-    (list (list 'live-after (set 'rax 'rsp) (set 'rax 'rsp) (set)))
-    (list (Instr 'movq (list (Imm 42) (Reg 'rax))) (Jmp 'conclusion))))
-  (cons
-   'block27357
-   (Block
-    (list (list 'live-after (set 'rax 'rsp) (set 'rax 'rsp) (set)))
-    (list (Instr 'movq (list (Imm 0) (Reg 'rax))) (Jmp 'conclusion))))
-  (cons
-   'block27359
-   (Block
-    (list
-     (list
-      'live-after
-      (set 'rax (Var 'tmp27356) 'rsp)
-      (set 'rax 'rsp)
-      (set 'rax 'rsp)
-      (set)))
-    (list
-     (Instr 'cmpq (list (Imm 1) (Reg 'rax)))
-     (JmpIf 'e 'block27357)
-     (Jmp 'block27358))))
-  (cons
-   'block27360
-   (Block
-    (list
-     (list
-      'live-after
-      (set 'rax 'rsp)
-      (set 'rsp 'rax (Reg 'rax))
-      (set 'rax (Var 'tmp27356) 'rsp)
-      (set)))
-    (list (Callq 'read_int 0) (Jmp 'block27359))))
-  (cons
-   'block27361
-   (Block
-    (list
-     (list
-      'live-after
-      (set 'rax (Var 'tmp27355) 'rsp)
-      (set 'rax 'rsp)
-      (set 'rax 'rsp)
-      (set)))
-    (list
-     (Instr 'cmpq (list (Imm 0) (Reg 'rax)))
-     (JmpIf 'e 'block27360)
-     (Jmp 'block27358))))
-  (cons
-   'start
-   (Block
-    (list
-     (list
-      'live-after
-      (set 'rax 'rsp)
-      (set 'rsp 'rax (Reg 'rax))
-      (set 'rax (Var 'tmp27355) 'rsp)
-      (set)))
-    (list (Callq 'read_int 0) (Jmp 'block27361)))))))
-|#
