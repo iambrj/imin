@@ -2,12 +2,9 @@
 #lang racket
 
 (require "utilities.rkt"
-         "interp-Rvar.rkt"
-         "interp-Cvar.rkt"
-         "interp-Rif.rkt"
-         "interp-Cif.rkt"
-         "type-check-Rif.rkt"
-         "type-check-Cif.rkt"
+         "interp-Rvec.rkt"
+         "interp-Rvec-prime.rkt"
+         "type-check-Rvec.rkt"
          "interp.rkt"
          "compiler.rkt")
 ;; (debug-level 1)
@@ -17,6 +14,10 @@
 ;; Note that your compiler file (the file that defines the passes)
 ;; should be named "compiler.rkt"
 (define passes
+  `(("shrink" ,shrink ,interp-Rvec ,type-check-Rvec)
+    ("expose allocation" ,expose-allocation ,interp-Rvec-prime ,type-check-Rvec)
+    ))
+#;(define passes
   `(("shrink" ,shrink ,interp-Rif ,type-check-Rif)
     ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rif ,type-check-Rif)
@@ -45,8 +46,8 @@
          all-tests)))
 
 (debug-level 1)
-(interp-tests "cond" type-check-Rif passes interp-Rif "cond_test" (tests-for "cond"))
+(interp-tests "vec" type-check-Rvec passes interp-Rvec "vectors_test" (tests-for "vectors"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-(compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
+; (compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
