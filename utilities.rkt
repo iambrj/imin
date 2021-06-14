@@ -1765,6 +1765,7 @@ Added structs for AST nodes.
 
 (define (read-fixnum)
   (define r (read))
+  (printf "Found : ~s\n" r)
   (cond [(fixnum? r) r]
         [else (error 'read "expected an integer")]))
 
