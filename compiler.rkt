@@ -176,35 +176,62 @@
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
-(define (atom? e)
-  (match e
-    [(Int i) #t]
-    [(Var v) #t]
-    [else #f]))
+(define (atom? x)
+  (or (Int? x)
+      (Bool? x)
+      (Var? x)
+      (Void? x)))
+
+(define (build-lets var->expr* body)
+  (printf "[build-lets] ~s\n" var->expr*)
+  (match var->expr*
+    ['() body]
+    [`((,var . ,expr) . ,d)
+      (Let var expr (build-lets d body))]))
 
 ; returns atomic expression, new env
 (define (rco-atm e)
+  (printf "[rco-atm] ~s\n" e)
   (match e
+    [(Void) (values (Void) '())]
     [(Int i) (values (Int i) '())]
     [(Var v) (values (Var v) '())]
     [(Bool b) (values (Bool b) '())]
-    ; XXX : cleaner way to handle all Prims in one go? map a procedure that
-    ; returns multiple values?
-    [(Prim 'read '())
-     (let ([tmp (gensym 'tmp)]) (values tmp `((,tmp . ,(Prim 'read '())))))]
-    [(Prim op `(,e1)) #:when (member op '(- not))
+    [(HasType e t) #:when (atom? e)
+     (values (HasType e t) e)]
+    [(HasType e t)
+     (let-values ([(atm env) (rco-atm e)])
+       ; Invariant : atm is *always* a (gensym 'tmp), since other cases are
+       ; caught by previous clauses
+       (values (HasType (Var atm) t)
+               (dict-set env atm (HasType (dict-ref env atm) t))))]
+    [(Collect bytes)
      (let ([tmp (gensym 'tmp)])
-       (let-values ([(atm atm->subexpr) (rco-atm e1)])
-         (values tmp (append atm->subexpr `((,tmp . ,(Prim op `(,atm))))))))]
-    [(Prim op `(,e1 ,e2)) #:when (member op '(eq? < +))
+       (values tmp `((,tmp . ,(Collect bytes)))))]
+    [(GlobalValue var)
      (let ([tmp (gensym 'tmp)])
-       (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
-                    [(atm2 atm->subexpr2) (rco-atm e2)])
-         (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
-               [atm2 (if (symbol? atm2) (Var atm2) atm2)])
-           (values tmp (append atm->subexpr1
-                               atm->subexpr2
-                               `((,tmp . ,(Prim op `(,atm1 ,atm2)))))))))]
+       (values tmp `((,tmp . ,(GlobalValue var)))))]
+    [(Allocate bytes t)
+     (let ([tmp (gensym 'tmp)])
+       (values tmp `((,tmp . ,(Allocate bytes t)))))]
+    [(Prim op es)
+     (let* ([tmp (gensym 'tmp)]
+            [atm-envs (map (compose (lambda (atm env)
+                                       (cons atm env))
+                                     rco-atm)
+                            es)]
+            ; Invariant : alist ordered envs preserve order of execution
+            [envs (filter-map (lambda (x)
+                                (and (not (empty? (cdr x)))
+                                     (cdr x))) atm-envs)]
+            [atms (map (compose (lambda (atm)
+                                  (if (symbol? atm)
+                                    (Var atm)
+                                    atm))
+                                car)
+                       atm-envs)])
+       (values tmp (append (apply append envs)
+                           `((,tmp . ,(Prim op atms))))))]
     [(If c t e)
      (let ([tmp (gensym 'tmp)])
        (values tmp `((,tmp . ,(If (rco-exp c) (rco-exp t) (rco-exp e))))))]
@@ -216,28 +243,34 @@
          (let ([tmp (gensym 'tmp)])
            (values tmp `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
 
-(define (build-lets var->expr* body)
-  (match var->expr*
-    ['() body]
-    [`((,var . ,expr) . ,d)
-      (Let var expr (build-lets d body))]))
-
 (define (rco-exp e)
+  (printf "[rco-exp] ~s\n" e)
   (match e
+    [(Void) (Void)]
     [(Int i) (Int i)]
     [(Var v) (Var v)]
     [(Bool b) (Bool b)]
-    [(Prim 'read '()) (Prim 'read '())]
-    [(Prim op `(,e)) #:when (member op '(not -))
-     (let-values ([(atm atm->expr) (rco-atm e)])
-       (let ([atm (if (symbol? atm) (Var atm) atm)])
-         (build-lets atm->expr (Prim op `(,atm)))))]
-    [(Prim op `(,e1 ,e2)) #:when (member op '(eq? < +))
-     (let-values ([(atm1 atm->subexpr1) (rco-atm e1)]
-                  [(atm2 atm->subexpr2) (rco-atm e2)])
-       (let ([atm1 (if (symbol? atm1) (Var atm1) atm1)]
-             [atm2 (if (symbol? atm2) (Var atm2) atm2)])
-         (build-lets (append atm->subexpr1 atm->subexpr2) (Prim op `(,atm1 ,atm2)))))]
+    [(HasType e t) (HasType (rco-exp e) t)]
+    [(Allocate bytes t) (Allocate bytes t)]
+    [(Collect bytes) (Collect bytes)]
+    [(GlobalValue var) (GlobalValue var)]
+    [(Prim op es)
+     (let* ([atm-envs (map (compose (lambda (a e)
+                                      (cons a e))
+                                    rco-atm)
+                           es)]
+            [atms (map (compose (lambda (atm)
+                                  (if (symbol? atm)
+                                    (Var atm)
+                                    atm))
+                                car)
+                       atm-envs)]
+            ; Invariant : alist ordered envs preserve order of execution
+            [envs (filter-map (lambda (x)
+                                (and (not (empty? (cdr x)))
+                                     (cdr x)))
+                              atm-envs)])
+       (build-lets (apply append envs) (Prim op atms)))]
     [(If c t e)
      (If (rco-exp c) (rco-exp t) (rco-exp e))]
     [(Let x v b) (Let x (rco-exp v) (rco-exp b))]))
