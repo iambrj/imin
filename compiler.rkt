@@ -51,23 +51,20 @@
 
 (define (shrink-exp e)
   (match e
+    [(Void) (Void)]
     [(Int i) (Int i)]
     [(Bool b) (Bool b)]
     [(Var v) (Var v)]
+    [(HasType e t)
+     (HasType (shrink-exp e) t)]
     [(Let v e b) (Let v (shrink-exp e) (shrink-exp b))]
     [(If c t e) (If (shrink-exp c) (shrink-exp t) (shrink-exp e))]
-    [(Prim '- `(,e1 ,e2))
-     (let ([e1 (shrink-exp e1)]
-           [e2 (shrink-exp e2)])
-       (Prim '+ `(,e1 ,(Prim '- `(,e2)))))]
-    [(Prim '+ es) (Prim '+ (map shrink-exp es))]
-    [(Prim '- `(,e))
-     (let ([e (shrink-exp e)])
-       (Prim '- `(,e)))]
-    [(Prim 'read '()) (Prim 'read '())]
-    [(Prim 'not `(,e))
-     (let ([e (shrink-exp e)])
-       (Prim 'not `(,e)))]
+    [(Prim op es) #:when (member op '(read - + not < vector vector-length))
+     (Prim op (map shrink-exp es))]
+    [(Prim 'vector-ref `(,e ,(Int i)))
+     (Prim 'vector-ref `(,(shrink-exp e) ,(Int i)))]
+    [(Prim 'vector-set! `(,e1 ,(Int i) ,e2))
+     (Prim 'vector-set! `(,(shrink-exp e1) ,(Int i) ,(shrink-exp e2)))]
     ; (and e1 e1) == (if e1 e2 #f)
     [(Prim 'and `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
@@ -78,7 +75,6 @@
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
        (If e1 (Bool #t) e2))]
-    [(Prim '< es) (Prim '< (map shrink-exp es))]
     [(Prim 'eq? es) (Prim 'eq? (map shrink-exp es))]
     ; (>= e1 e2) == (not (< e1 e2))
     [(Prim '>= `(,e1 ,e2))
@@ -101,6 +97,7 @@
        (shrink-exp e))]))
 
 (define (shrink p)
+  (printf "shrink passed : ~s\n" p)
   (match p
     [(Program info e)
      (Program info (shrink-exp e))]))
