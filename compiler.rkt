@@ -24,7 +24,7 @@
     (map Reg r)))
 ; '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
 (define usable-registers
-  (let ([r '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)])
+  (let ([r '(rbx rcx rdx rsi rdi r8 r9 r10 r12 r13 r14 r15)])
     (map Reg r)))
 
 ;; Partial evaluation pass described in the book.
@@ -141,7 +141,7 @@
        (build-lets var->expr (parse-exp vname)))]
     [(Let v e b) (Let v (ea-exp e) (ea-exp b))]
     [(If c t e) (If (ea-exp c) (ea-exp t) (ea-exp e))]
-    [(Prim op es) #:when (member op '(read - + not < vector-length))
+    [(Prim op es) #:when (member op '(eq? read - + not < vector-length))
      (Prim op (map ea-exp es))]
     [(Prim 'vector-ref `(,e ,(Int i)))
      (Prim 'vector-ref `(,(ea-exp e) ,(Int i)))]
@@ -319,6 +319,7 @@
     [(Var x)            (IfStmt (Prim 'eq? `(,(Var x) ,(Bool #t)))
                                 (force (block->goto t label->block))
                                 (force (block->goto e label->block)))]
+    ; XXX : annotate type again
     [(HasType e type)
      (explicate-pred c t e label->block)]
     [(Prim 'not `(,e1)) (explicate-pred e1 e t label->block)]
@@ -342,9 +343,14 @@
       [(or (Void) (Bool _) (Int _) (Var _) (Allocate _ _) (GlobalValue _)
            (Prim _ _) (Collect _))
        (Seq (Assign (Var x) rhs) cont)]
+      ; XXX : annotate type again
+      [(HasType e t) (explicate-assign e x cont label->block)]
       [(Let y rhs body)
        ; TODO : try passing cont to explicate-tail to avoid merge-conts
-       (let ([cont (merge-conts (explicate-tail body label->block) cont x)])
+       #;(printf "label->block : ~s\n" label->block)
+       (let* ([cont1 (explicate-tail body label->block)]
+              #;[_ (printf "cont1 : ~s\nlabel->block : ~s\n" cont1 label->block)]
+              [cont (merge-conts cont1 cont x)])
          (explicate-assign rhs y cont label->block))]
       [(If c t e)
        (let ([cont-t (delay (explicate-assign t x cont label->block))]
@@ -379,6 +385,18 @@
             [tail (explicate-tail body label->block)]
             [_ (dict-set! label->block 'start tail)])
        (CProgram info (hash->list label->block)))]))
+
+(define (pmask t [mask 0])
+  (match t
+    [`(Vector) mask]
+    [`(Vector (Vector . ,_))
+      (bitwise-ior mask 1)]
+    [`(Vector ,_) mask]
+    [`(Vector . ((Vector . ,_) . ,rest))
+      (pmask `(Vector . ,rest) (arithmetic-shift (bitwise-ior mask 1) 1))]
+    [`(Vector . (,t . ,rest))
+      (pmask `(Vector . ,rest) (arithmetic-shift mask 1))]
+    [else (error "Couldn't make pmask for " t)]))
 
 ; second argument of cmp cannot be an immediate, generate temorary mov if it is
 (define (cmp-tmp-mov a)
@@ -437,6 +455,25 @@
                `(,(Instr 'cmpq `(,a2 ,a1))
                   ,(Instr 'set `(l ,(Reg 'al)))
                   ,(Instr 'movzbq `(,(Reg 'al) ,(Var v))))))]
+    [(Assign (Var x) (Prim 'vector-ref `(,v ,(Int n))))
+     `(,(Instr 'movq `(,v ,(Reg 'r11)))
+        ,(Instr 'movq `(,(Deref 'r11 (- (* 8 (+ n 1)))) ,(Var x))))]
+    [(Assign (Var x) (Prim 'vector-set! `(,v ,(Int n) ,a)))
+     (let ([a (si-atm a)])
+       `(,(Instr 'movq `(,v ,(Reg 'r11)))
+          ,(Instr 'movq `(,a ,(Deref 'r11 (- (* 8 (+ n 1))))))
+          ,(Instr 'movq `(,(Imm 0) ,(Var x)))))]
+    ; Invariant : allocate is only called when it is guaranteed that there is
+    ; enough space
+    ; Invariant : allocate can only appear in rhs of a let
+    [(Assign (Var v) (Allocate len t))
+     (let ([tag (bitwise-ior 1 ; In FromSpace, not yet copied
+                             (arithmetic-shift len 1) ; size of tuple
+                             (arithmetic-shift (pmask t) 7))])
+       `(,(Instr 'movq `(,(Deref 'r11 (GlobalValue 'free_ptr))))
+          ,(Instr 'add1 `(,(* 8 (+ len 1)) ,(Deref 'r11 (GlobalValue 'free_ptr))))
+          ,(Instr 'movq `(,(Imm tag) ,(Deref 'r11 0)))
+          ,(Instr 'movq `(,(Reg 'r11) ,(Var v)))))]
     [else (error "si-stmt passed non-statement expression : " e)]))
 
 (define (si-tail e)
@@ -457,6 +494,16 @@
        `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
          ,(Instr 'addq `(,a2 ,(Reg 'rax)))
          ,(Jmp 'conclusion)))]
+    [(Return (Prim 'vector-ref `(,v ,(Int n))))
+     `(,(Instr 'movq `(,v ,(Reg 'r11)))
+        ,(Instr 'movq `(,(Deref 'r11 (- (* 8 (+ n 1)))) ,(Reg 'rax)))
+        ,(Jmp 'conclusion))]
+    [(Return (Prim 'vector-set! `(,v ,(Int n) ,a)))
+     (let ([a (si-atm a)])
+       `(,(Instr 'movq `(,v ,(Reg 'r11)))
+          ,(Instr 'movq `(,a ,(Deref 'r11 (- (* 8 (+ n 1))))))
+          ,(Instr 'movq `(,(Imm 0) ,(Reg 'rax)))
+          ,(Jmp 'conclusion)))]
     [(Seq stmt tail)
      (let ([s (si-stmt stmt)]
            [t (si-tail tail)])
