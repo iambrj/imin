@@ -30,19 +30,19 @@
 ;; Partial evaluation pass described in the book.
 (define (pe-neg r)
   (match r
-    [(Int n) (Int (fx- 0 n))]
-    [else (Prim '- (list r))]))
+    [(Int n)  (Int (fx- 0 n))]
+    [else     (Prim '- (list r))]))
 
 (define (pe-add r1 r2)
   (match* (r1 r2)
-    [((Int n1) (Int n2)) (Int (fx+ n1 n2))]
-    [(_ _) (Prim '+ (list r1 r2))]))
+    [((Int n1) (Int n2))  (Int (fx+ n1 n2))]
+    [(_ _)                (Prim '+ (list r1 r2))]))
 
 (define (pe-exp e)
   (match e
-    [(Int n) (Int n)]
-    [(Prim 'read '()) (Prim 'read '())]
-    [(Prim '- `(,e1)) (pe-neg (pe-exp e1))]
+    [(Int n)              (Int n)]
+    [(Prim 'read '())     (Prim 'read '())]
+    [(Prim '- `(,e1))     (pe-neg (pe-exp e1))]
     [(Prim '+ `(,e1 ,e2)) (pe-add (pe-exp e1) (pe-exp e2))]))
 
 (define (pe-Rint p)
@@ -51,14 +51,13 @@
 
 (define (shrink-exp e)
   (match e
-    [(Void) (Void)]
-    [(Int i) (Int i)]
-    [(Bool b) (Bool b)]
-    [(Var v) (Var v)]
-    [(HasType e t)
-     (HasType (shrink-exp e) t)]
-    [(Let v e b) (Let v (shrink-exp e) (shrink-exp b))]
-    [(If c t e) (If (shrink-exp c) (shrink-exp t) (shrink-exp e))]
+    [(Void)         (Void)]
+    [(Int i)        (Int i)]
+    [(Bool b)       (Bool b)]
+    [(Var v)        (Var v)]
+    [(HasType e t)  (HasType (shrink-exp e) t)]
+    [(Let v e b)    (Let v (shrink-exp e) (shrink-exp b))]
+    [(If c t e)     (If (shrink-exp c) (shrink-exp t) (shrink-exp e))]
     [(Prim op es) #:when (member op '(read - + not < vector vector-length))
      (Prim op (map shrink-exp es))]
     [(Prim 'vector-ref `(,e ,(Int i)))
@@ -113,10 +112,10 @@
 ; 4. Initalize vector
 (define (ea-exp e)
   (match e
-    [(Void) (Void)]
-    [(Int i) (Int i)]
+    [(Void)   (Void)]
+    [(Int i)  (Int i)]
     [(Bool b) (Bool b)]
-    [(Var v) (Var v)]
+    [(Var v)  (Var v)]
     [(HasType (Prim 'vector es) t)
      (let* ([vname (gensym 'v)]
             [len (length es)]
@@ -156,9 +155,8 @@
 
 (define ((uniquify-exp env) e)
   (match e
-    [(Var x)
-     (Var (dict-ref env x))]
-    [(Int n) (Int n)]
+    [(Var x)  (Var (dict-ref env x))]
+    [(Int n)  (Int n)]
     [(Bool b) (Bool b)]
     [(If c t e)
      (let ([u (uniquify-exp env)])
@@ -183,7 +181,6 @@
       (Void? x)))
 
 (define (build-lets var->expr* body)
-  (printf "[build-lets] ~s\n" var->expr*)
   (match var->expr*
     ['() body]
     [`((,var . ,expr) . ,d)
@@ -191,11 +188,10 @@
 
 ; returns atomic expression, new env
 (define (rco-atm e)
-  (printf "[rco-atm] ~s\n" e)
   (match e
-    [(Void) (values (Void) '())]
-    [(Int i) (values (Int i) '())]
-    [(Var v) (values (Var v) '())]
+    [(Void)   (values (Void) '())]
+    [(Int i)  (values (Int i) '())]
+    [(Var v)  (values (Var v) '())]
     [(Bool b) (values (Bool b) '())]
     [(HasType e t) #:when (atom? e)
      (values (HasType e t) e)]
@@ -244,16 +240,15 @@
            (values tmp `((,tmp . ,(Let x (rco-exp v) (rco-exp b))))))))]))
 
 (define (rco-exp e)
-  (printf "[rco-exp] ~s\n" e)
   (match e
-    [(Void) (Void)]
-    [(Int i) (Int i)]
-    [(Var v) (Var v)]
-    [(Bool b) (Bool b)]
-    [(HasType e t) (HasType (rco-exp e) t)]
+    [(Void)             (Void)]
+    [(Int i)            (Int i)]
+    [(Var v)            (Var v)]
+    [(Bool b)           (Bool b)]
+    [(HasType e t)      (HasType (rco-exp e) t)]
     [(Allocate bytes t) (Allocate bytes t)]
-    [(Collect bytes) (Collect bytes)]
-    [(GlobalValue var) (GlobalValue var)]
+    [(Collect bytes)    (Collect bytes)]
+    [(GlobalValue var)  (GlobalValue var)]
     [(Prim op es)
      (let* ([atm-envs (map (compose (lambda (a e)
                                       (cons a e))
@@ -283,14 +278,19 @@
 
 ; c1 = Assign_1, Assign_2, ..., Assign_k, Ret1
 ; c2 = Assign_(k + 1), ..., Ret2
-; x =  Assign_1, Assign_2, ..., Assign_k, Assign_(k + 1), ..., Ret2
+; Assign_1, Assign_2, ..., Assign_k, x = Ret1, Assign_(k + 1), ..., Ret2
 (define (merge-conts c1 c2 x)
   (match c1
-    [(Return v)
-     (Seq (Assign (Var x) v) c2)]
-    [(Seq a tail)
-     (Seq a (merge-conts tail c2 x))]
-    [else (error "Couldn't merge : " c1 c2)]))
+    [(Return v)   (Seq (Assign (Var x) v) c2)]
+    [(Seq a tail) (Seq a (merge-conts tail c2 x))]
+    [else         (error "Couldn't merge : " c1 c2)]))
+
+; annotate return with type t
+(define (annotate-cont c t)
+  (match c
+    [(Return v)   (Return (HasType v t))]
+    [(Seq a tail) (Seq a (annotate-cont tail t))]
+    [else         (error "Couldn't annotate ~s with ~s" c t)]))
 
 (define (block->goto b label->block)
   (delay
@@ -310,17 +310,18 @@
 ; and then goto for that block is inserted
 (define (explicate-pred c t e label->block)
   (match c
-    [(Var x) (IfStmt (Prim 'eq? `(,(Var x) ,(Bool #t)))
-                     (force (block->goto t label->block))
-                     (force (block->goto e label->block)))]
-    [(Bool #t) (force (block->goto t label->block))]
-    [(Bool #f) (force (block->goto e label->block))]
-    [(Prim op es) #:when (or (eq? op 'eq?) (eq? op '<))
+    [(Bool #t)          (force (block->goto t label->block))]
+    [(Bool #f)          (force (block->goto e label->block))]
+    [(Var x)            (IfStmt (Prim 'eq? `(,(Var x) ,(Bool #t)))
+                                (force (block->goto t label->block))
+                                (force (block->goto e label->block)))]
+    [(HasType e type)
+     (explicate-pred c t e label->block)]
+    [(Prim 'not `(,e1)) (explicate-pred e1 e t label->block)]
+    [(Prim op es) #:when (member op '(eq? < vector-ref))
      (IfStmt (Prim op es)
              (force (block->goto t label->block))
              (force (block->goto e label->block)))]
-    [(Prim 'not `(,e1))
-     (explicate-pred e1 e t label->block)]
     [(Let x rhs body)
      (let ([cont (delay (explicate-pred body t e label->block))])
        (explicate-assign rhs x cont label->block))]
@@ -331,31 +332,40 @@
     [else (error "explicate-pred passed non bool type expr : " c)]))
 
 (define (explicate-assign rhs x cont label->block)
+  ; XXX : lazier way to do this?
   (let ([cont (force (block->goto cont label->block))])
     (match rhs
-      [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
-      [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
-      [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
+      [(Void)             (Seq (Assign (Var x) (Void)) cont)]
+      [(Bool b)           (Seq (Assign (Var x) (Bool b)) cont)]
+      [(Int n)            (Seq (Assign (Var x) (Int n)) cont)]
+      [(Var y)            (Seq (Assign (Var x) (Var y)) cont)]
+      [(Allocate bytes t) (Seq (Assign (Var x) (Allocate bytes t)) cont)]
+      [(GlobalValue var)  (Seq (Assign (Var x) (GlobalValue var)) cont)]
+      [(Prim op es)       (Seq (Assign (Var x) (Prim op es)) cont)]
+      [(Collect b)        (Seq (Assign (Var x) (Collect b)) cont)]
+      [(HasType e t)
+       (let ([acont (annotate-cont (explicate-tail e label->block) t)])
+         (merge-conts acont cont x))]
       [(Let y rhs body)
        ; TODO : try passing cont to explicate-tail to avoid merge-conts
-       (let* ([cont1 (explicate-tail body label->block)]
-              [cont (merge-conts cont1 cont x)])
+       (let ([cont (merge-conts (explicate-tail body label->block) cont x)])
          (explicate-assign rhs y cont label->block))]
-      [(Prim op es)
-       (Seq (Assign (Var x) (Prim op es))
-            cont)]
       [(If c t e)
-       (let* ([cont-t (delay (explicate-assign t x cont label->block))]
-              [cont-e (delay (explicate-assign e x cont label->block))])
+       (let ([cont-t (delay (explicate-assign t x cont label->block))]
+             [cont-e (delay (explicate-assign e x cont label->block))])
          (explicate-pred c cont-t cont-e label->block))]
       [else (error "explicate-assign unhandled case" rhs)])))
 
 (define (explicate-tail e label->block)
   (match e
-    [(Var x) (Return (Var x))]
-    [(Bool b) (Return (Bool b))]
-    [(Int n) (Return (Int n))]
-    [(Prim op es) (Return (Prim op es))]
+    [(Void)               (Return (Void))]
+    [(Bool b)             (Return (Bool b))]
+    [(Int n)              (Return (Int n))]
+    [(Var x)              (Return (Var x))]
+    [(Prim op es)         (Return (Prim op es))]
+    [(Allocate bytes t)   (Return (Allocate bytes t))]
+    [(GlobalValue v)      (Return (GlobalValue v))]
+    [(HasType e t)        (HasType (explicate-tail e label->block) t)]
     [(Let x rhs body)
      (let* ([cont (explicate-tail body label->block)])
        (explicate-assign rhs x cont label->block))]
