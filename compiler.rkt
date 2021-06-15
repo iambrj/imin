@@ -283,7 +283,7 @@
   (match c1
     [(Return v)   (Seq (Assign (Var x) v) c2)]
     [(Seq a tail) (Seq a (merge-conts tail c2 x))]
-    [else         (error "Couldn't merge : " c1 c2)]))
+    [else         (error "Couldn't merge " c1 " and " c2)]))
 
 ; annotate return with type t
 (define (annotate-cont c t)
@@ -300,6 +300,10 @@
         [else (let ([l (gensym 'block)])
                 (dict-set! label->block l b)
                 (Goto l))]))))
+
+(define (insert-assign! x cont l label->block)
+  (let ([tail (dict-ref label->block l)])
+    (dict-set! label->block l (merge-conts cont tail x))))
 
 ; explicate-pred (if e1 e2 e2) B1 B2 => B5
 ; add B1 and B2 to CFG with labels l1 and l2
@@ -332,20 +336,12 @@
     [else (error "explicate-pred passed non bool type expr : " c)]))
 
 (define (explicate-assign rhs x cont label->block)
-  ; XXX : lazier way to do this?
+  ; Invaraint : only way to reach cont is after the assignment x = rhs
   (let ([cont (force (block->goto cont label->block))])
     (match rhs
-      [(Void)             (Seq (Assign (Var x) (Void)) cont)]
-      [(Bool b)           (Seq (Assign (Var x) (Bool b)) cont)]
-      [(Int n)            (Seq (Assign (Var x) (Int n)) cont)]
-      [(Var y)            (Seq (Assign (Var x) (Var y)) cont)]
-      [(Allocate bytes t) (Seq (Assign (Var x) (Allocate bytes t)) cont)]
-      [(GlobalValue var)  (Seq (Assign (Var x) (GlobalValue var)) cont)]
-      [(Prim op es)       (Seq (Assign (Var x) (Prim op es)) cont)]
-      [(Collect b)        (Seq (Assign (Var x) (Collect b)) cont)]
-      [(HasType e t)
-       (let ([acont (annotate-cont (explicate-tail e label->block) t)])
-         (merge-conts acont cont x))]
+      [(or (Void) (Bool _) (Int _) (Var _) (Allocate _ _) (GlobalValue _)
+           (Prim _ _) (Collect _))
+       (Seq (Assign (Var x) rhs) cont)]
       [(Let y rhs body)
        ; TODO : try passing cont to explicate-tail to avoid merge-conts
        (let ([cont (merge-conts (explicate-tail body label->block) cont x)])
