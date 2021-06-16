@@ -8,11 +8,6 @@
          "priority_queue.rkt")
 (provide (all-defined-out))
 
-(define framesize 16)
-
-(define (round-frame i)
-  (* 16 (exact-ceiling (/ i 16.))))
-
 (define caller-saved
   (let ([r '(rax rcx rdx rsi rdi r8 r9 r10 r11)])
     (map Reg r)))
@@ -347,9 +342,7 @@
       [(HasType e t) (explicate-assign e x cont label->block)]
       [(Let y rhs body)
        ; TODO : try passing cont to explicate-tail to avoid merge-conts
-       #;(printf "label->block : ~s\n" label->block)
        (let* ([cont1 (explicate-tail body label->block)]
-              #;[_ (printf "cont1 : ~s\nlabel->block : ~s\n" cont1 label->block)]
               [cont (merge-conts cont1 cont x)])
          (explicate-assign rhs y cont label->block))]
       [(If c t e)
@@ -777,7 +770,7 @@
                                                  usable-registers))]
                    [(used-callee) (filter (lambda (r)
                                             (member r callee-saved))
-                                          (dict-values var->mem))])
+                                          (remove-duplicates (dict-values var->mem)))])
        (X86Program (dict-set* info
                               'stack-space stack-space
                               'var->mem var->mem
@@ -868,25 +861,33 @@
 (define (print-main-block stack-space used-callee)
   (string-append "main:\n"
                  "\tpushq %rbp\n"
-                 "\tmovq %rsp, %rbp\n"
                  (apply string-append
                         (map (lambda (r)
                                (string-append "\tpushq %"
                                               (symbol->string (Reg-name r))
                                               "\n"))
                              used-callee))
-                 "\tsubq $" (number->string (round-frame (+ (* 8 (length used-callee)) stack-space))) ", %rsp\n"
+                 "\tmovq %rsp, %rbp\n"
+                 "\tsubq $" (number->string (if (zero? (modulo (+ stack-space
+                                                                  (* 8 (length used-callee)))
+                                                               16))
+                                              stack-space
+                                              (+ 8 stack-space))) ", %rsp\n"
                  "\tjmp start\n"))
 
 (define (print-conclusion-block stack-space used-callee)
   (string-append "conclusion:\n"
+                 "\taddq $" (number->string (if (zero? (modulo (+ stack-space
+                                                                  (* 8 (length used-callee)))
+                                                               16))
+                                              stack-space
+                                              (+ 8 stack-space))) ", %rsp\n"
                  (apply string-append
                         (map (lambda (r)
                                (string-append "\tpopq %"
                                               (symbol->string (Reg-name r))
                                               "\n"))
                              used-callee))
-                 "\taddq $" (number->string (round-frame (+ (* 8 (length used-callee)) stack-space))) ", %rsp\n"
                  "\tpopq %rbp\n"
                  "\tretq\n"))
 
