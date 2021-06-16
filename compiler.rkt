@@ -53,6 +53,9 @@
     [(HasType e t)  (HasType (shrink-exp e) t)]
     [(Let v e b)    (Let v (shrink-exp e) (shrink-exp b))]
     [(If c t e)     (If (shrink-exp c) (shrink-exp t) (shrink-exp e))]
+    [(Prim '- `(,e1 ,e2))
+     (let ([t (gensym 'tmp)])
+       (Let t (Prim '- `(,(shrink-exp e1))) (Prim '+ `(,(Var t) ,(shrink-exp e2)))))]
     [(Prim op es) #:when (member op '(read - + not < vector vector-length))
      (Prim op (map shrink-exp es))]
     [(Prim 'vector-ref `(,e ,(Int i)))
@@ -296,9 +299,17 @@
                 (dict-set! label->block l b)
                 (Goto l))]))))
 
-(define (insert-assign! x cont l label->block)
-  (let ([tail (dict-ref label->block l)])
-    (dict-set! label->block l (merge-conts cont tail x))))
+(define (base? e)
+  (match e
+    [(or (Void) (Bool _) (Int _) (Var _) (Allocate _ _) (GlobalValue _)
+           (Prim _ _) (Collect _))
+       #t]
+    [else #f]))
+
+(define (make-ifstmt c t e label->block)
+  (IfStmt c
+          (force (block->goto t label->block))
+          (force (block->goto e label->block))))
 
 ; explicate-pred (if e1 e2 e2) B1 B2 => B5
 ; add B1 and B2 to CFG with labels l1 and l2
@@ -309,65 +320,55 @@
 ; and then goto for that block is inserted
 (define (explicate-pred c t e label->block)
   (match c
-    [(Bool #t)          (force (block->goto t label->block))]
-    [(Bool #f)          (force (block->goto e label->block))]
-    [(Var x)            (IfStmt (Prim 'eq? `(,(Var x) ,(Bool #t)))
-                                (force (block->goto t label->block))
-                                (force (block->goto e label->block)))]
-    ; XXX : annotate type again
-    [(HasType e type)
-     (explicate-pred c t e label->block)]
-    [(Prim 'not `(,e1)) (explicate-pred e1 e t label->block)]
+    [(Bool #t) (block->goto t label->block)]
+    [(Bool #f) (block->goto e label->block)]
+    [(Var x)
+     (delay (make-ifstmt (Prim 'eq? `(,(Var x) ,(Bool #t))) t e label->block))]
     [(Prim op es) #:when (member op '(eq? < vector-ref))
-     (IfStmt (Prim op es)
-             (force (block->goto t label->block))
-             (force (block->goto e label->block)))]
+     (delay (make-ifstmt (Prim op es) t e label->block))]
+    [(Prim 'not `(,c))
+     (explicate-pred c e t label->block)]
     [(Let x rhs body)
-     (let ([cont (delay (explicate-pred body t e label->block))])
+     (let ([cont (explicate-pred body t e label->block)])
        (explicate-assign rhs x cont label->block))]
     [(If c1 t1 e1)
-     (let([t2 (delay (explicate-pred t1 t e label->block))]
-          [e2 (delay (explicate-pred e1 t e label->block))])
+     (let([t2 (explicate-pred t1 t e label->block)]
+          [e2 (explicate-pred e1 t e label->block)])
        (explicate-pred c1 t2 e2 label->block))]
+    ; TODO : annotate type again
+    [(HasType e type)
+     (explicate-pred c t e label->block)]
     [else (error "explicate-pred passed non bool type expr : " c)]))
 
 (define (explicate-assign rhs x cont label->block)
   ; Invaraint : only way to reach cont is after the assignment x = rhs
   (let ([cont (force (block->goto cont label->block))])
     (match rhs
-      [(or (Void) (Bool _) (Int _) (Var _) (Allocate _ _) (GlobalValue _)
-           (Prim _ _) (Collect _))
-       (Seq (Assign (Var x) rhs) cont)]
-      ; XXX : annotate type again
-      [(HasType e t) (explicate-assign e x cont label->block)]
+      [_ #:when (base? rhs)
+       (delay (Seq (Assign (Var x) rhs) cont))]
       [(Let y rhs body)
-       ; TODO : try passing cont to explicate-tail to avoid merge-conts
-       (let* ([cont1 (explicate-tail body label->block)]
-              [cont (merge-conts cont1 cont x)])
-         (explicate-assign rhs y cont label->block))]
+       (let ([body (explicate-assign body x cont label->block)])
+         (explicate-assign rhs y body label->block))]
       [(If c t e)
-       (let ([cont-t (delay (explicate-assign t x cont label->block))]
-             [cont-e (delay (explicate-assign e x cont label->block))])
+       (let ([cont-t (explicate-assign t x cont label->block)]
+             [cont-e (explicate-assign e x cont label->block)])
          (explicate-pred c cont-t cont-e label->block))]
+      ; TODO : annotate type again
+      [(HasType e t) (explicate-assign e x cont label->block)]
       [else (error "explicate-assign unhandled case" rhs)])))
 
 (define (explicate-tail e label->block)
   (match e
-    [(Void)               (Return (Void))]
-    [(Bool b)             (Return (Bool b))]
-    [(Int n)              (Return (Int n))]
-    [(Var x)              (Return (Var x))]
-    [(Prim op es)         (Return (Prim op es))]
-    [(Allocate bytes t)   (Return (Allocate bytes t))]
-    [(GlobalValue v)      (Return (GlobalValue v))]
-    [(HasType e t)        (HasType (explicate-tail e label->block) t)]
+    [_ #:when(base? e)
+     (delay (Return e))]
     [(Let x rhs body)
-     (let* ([cont (explicate-tail body label->block)])
-       (explicate-assign rhs x cont label->block))]
+     (explicate-assign rhs x (explicate-tail body label->block) label->block)]
     [(If c t e)
-     (let ([t1 (block->goto (delay (explicate-tail t label->block)) label->block)]
-           [e1 (block->goto (delay (explicate-tail e label->block)) label->block)])
-     (explicate-pred c t1 e1 label->block))]
+     (explicate-pred c
+                     (explicate-tail t label->block)
+                     (explicate-tail e label->block)
+                     label->block)]
+    [(HasType e t) (HasType (explicate-tail e label->block) t)]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
 
 ; explicate-control : R1 -> C0
@@ -376,7 +377,7 @@
     [(Program info body)
      (let* ([label->block (make-hash)]
             [tail (explicate-tail body label->block)]
-            [_ (dict-set! label->block 'start tail)])
+            [_ (dict-set! label->block 'start (force tail))])
        (CProgram info (hash->list label->block)))]))
 
 (define (pmask t [mask 0])
