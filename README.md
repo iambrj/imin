@@ -9,6 +9,7 @@ A compiler for (a subset of) Racket -> x86-64, written in Racket
 
 ## Resources
 
+- [Harvard assembly tutorial](https://cs61.seas.harvard.edu/site/2019/Asm)
 - [x86-64 for the compiler writer](http://web.cecs.pdx.edu/~apt/cs491/x86-64.pdf)
 - [x86-64 cheatsheet](https://www.cs.cmu.edu/~fp/courses/15213-s07/misc/asm64-handout.pdf)
 - [Indiana University compiler course](https://iucompilercourse.github.io/IU-P423-P523-E313-E513-Fall-2020/)
