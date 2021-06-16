@@ -342,10 +342,9 @@
 
 (define (explicate-assign rhs x cont label->block)
   ; Invaraint : only way to reach cont is after the assignment x = rhs
-  (let ([cont (force (block->goto cont label->block))])
     (match rhs
       [_ #:when (base? rhs)
-       (delay (Seq (Assign (Var x) rhs) cont))]
+       (delay (Seq (Assign (Var x) rhs) (force cont)))]
       [(Let y rhs body)
        (let ([body (explicate-assign body x cont label->block)])
          (explicate-assign rhs y body label->block))]
@@ -355,7 +354,7 @@
          (explicate-pred c cont-t cont-e label->block))]
       ; TODO : annotate type again
       [(HasType e t) (explicate-assign e x cont label->block)]
-      [else (error "explicate-assign unhandled case" rhs)])))
+      [else (error "explicate-assign unhandled case" rhs)]))
 
 (define (explicate-tail e label->block)
   (match e
