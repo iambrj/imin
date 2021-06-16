@@ -119,3 +119,8 @@ which will produce the executable program named a.out.
     code -- in this case, this duplication can introduce issues if either of
     them are a `(read)` call, since the compiled program may potentially have to
     read the file twice instead of once!
+
+## Notes
+
+- `rsp` must always be of the form `8 + 16 * n`, for some natural `n`.
+    If `pushq`s/`popq`s break this alignment, it must be realigned via `sub`q.
