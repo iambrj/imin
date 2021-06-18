@@ -311,13 +311,6 @@
           (force (block->goto t label->block))
           (force (block->goto e label->block))))
 
-; explicate-pred (if e1 e2 e2) B1 B2 => B5
-; add B1 and B2 to CFG with labels l1 and l2
-; (explicate-pred e2 (goto l1) (goto l2)) => B3
-; (explicate-pred e3 (goto l1) (goto l2)) => B4
-; (explicate-pred e1 B3 B4) => B5
-; whe t and e are forced, the generated blocks which are added to label->block
-; and then goto for that block is inserted
 (define (explicate-pred c t e label->block)
   (match c
     [(Bool b) (if b t e)]
@@ -331,31 +324,36 @@
      (let ([cont (explicate-pred body t e label->block)])
        (explicate-assign rhs x cont label->block))]
     [(If c1 t1 e1)
+    ; Invariant : t/e will be used _at least_ once, so it is safe to lazily add
+    ; them to the table now
      (let* ([t (block->goto t label->block)]
             [e (block->goto e label->block)]
             [t2 (explicate-pred t1 t e label->block)]
             [e2 (explicate-pred e1 t e label->block)])
        (explicate-pred c1 t2 e2 label->block))]
-    ; TODO : annotate type again
     [(HasType e type)
-     (explicate-pred c t e label->block)]
+     (HasType (explicate-pred c t e label->block) type)]
     [else (error "explicate-pred passed non bool type expr : " c)]))
 
-(define (explicate-assign rhs x cont label->block)
+(define (explicate-assign rhs x cont label->block [annotate #f])
   ; Invaraint : only way to reach cont is after the assignment x = rhs
-    (match rhs
-      [_ #:when (base? rhs)
-       (delay (Seq (Assign (Var x) rhs) (force cont)))]
-      [(Let y rhs body)
-       (let ([body (explicate-assign body x cont label->block)])
-         (explicate-assign rhs y body label->block))]
-      [(If c t e)
-       (let ([cont-t (explicate-assign t x cont label->block)]
-             [cont-e (explicate-assign e x cont label->block)])
-         (explicate-pred c cont-t cont-e label->block))]
-      ; TODO : annotate type again
-      [(HasType e t) (explicate-assign e x cont label->block)]
-      [else (error "explicate-assign unhandled case" rhs)]))
+  (match rhs
+    [_ #:when (base? rhs)
+       (delay (Seq (Assign (Var x)
+                           (if annotate
+                             (HasType rhs annotate)
+                             rhs))
+                   (force cont)))]
+    [(Let y rhs body)
+     (let ([body (explicate-assign body x cont label->block)])
+       (explicate-assign rhs y body label->block))]
+    [(If c t e)
+     (let ([cont-t (explicate-assign t x cont label->block)]
+           [cont-e (explicate-assign e x cont label->block)])
+       (explicate-pred c cont-t cont-e label->block))]
+    [(HasType e t)
+     (explicate-assign e x cont label->block t)]
+    [else (error "explicate-assign unhandled case" rhs)]))
 
 (define (explicate-tail e label->block)
   (match e
@@ -371,7 +369,9 @@
     [(HasType e t) (HasType (explicate-tail e label->block) t)]
     [else (error "explicate-tail was passed a non tail expression : " e)]))
 
-; explicate-control : R1 -> C0
+; Stuff that lazy evaluation achieves
+; 1. Avoids duplicate block generation
+; 2. Avoids unreachable block generation aka constant folding over booleans
 (define (explicate-control p)
   (match p
     [(Program info body)
