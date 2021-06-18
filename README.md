@@ -124,3 +124,6 @@ which will produce the executable program named a.out.
 
 - `rsp` must always be of the form `8 + 16 * n`, for some natural `n`.
     If `pushq`s/`popq`s break this alignment, it must be realigned via `sub`q.
+- Stuff that lazy explicate control achieves
+    1. Avoids duplicate block generation
+    2. Avoids dead block generation
