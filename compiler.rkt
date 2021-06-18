@@ -320,8 +320,7 @@
 ; and then goto for that block is inserted
 (define (explicate-pred c t e label->block)
   (match c
-    [(Bool #t) (block->goto t label->block)]
-    [(Bool #f) (block->goto e label->block)]
+    [(Bool b) (if b t e)]
     [(Var x)
      (delay (make-ifstmt (Prim 'eq? `(,(Var x) ,(Bool #t))) t e label->block))]
     [(Prim op es) #:when (member op '(eq? < vector-ref))
@@ -332,8 +331,10 @@
      (let ([cont (explicate-pred body t e label->block)])
        (explicate-assign rhs x cont label->block))]
     [(If c1 t1 e1)
-     (let([t2 (explicate-pred t1 t e label->block)]
-          [e2 (explicate-pred e1 t e label->block)])
+     (let* ([t (block->goto t label->block)]
+            [e (block->goto e label->block)]
+            [t2 (explicate-pred t1 t e label->block)]
+            [e2 (explicate-pred e1 t e label->block)])
        (explicate-pred c1 t2 e2 label->block))]
     ; TODO : annotate type again
     [(HasType e type)
