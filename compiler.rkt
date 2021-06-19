@@ -333,7 +333,7 @@
        (explicate-pred c1 t2 e2 label->block))]
     [(HasType e type)
      (HasType (explicate-pred c t e label->block) type)]
-    [else (error "explicate-pred passed non bool type expr : " c)]))
+    [else (error "explicate-pred unhandled case " c)]))
 
 (define (explicate-assign rhs x cont label->block [annotate #f])
   ; Invaraint : only way to reach cont is after the assignment x = rhs
@@ -367,7 +367,7 @@
                      (explicate-tail e label->block)
                      label->block)]
     [(HasType e t) (HasType (explicate-tail e label->block) t)]
-    [else (error "explicate-tail was passed a non tail expression : " e)]))
+    [else (error "explicate-tail unhandled case " e)]))
 
 ; Stuff that lazy evaluation achieves
 ; 1. Avoids duplicate block generation
@@ -405,13 +405,18 @@
     [(Var v) (Var v)]
     [(Bool #f) (Imm 0)]
     [(Bool #t) (Imm 1)]
-    [else (error "si-atm passed non-atom expression : " e)]))
+    [(GlobalValue g) (Global g)]
+    [(HasType x _)  (si-atm x)]
+    [else (error "si-atm unhandled case " e)]))
 
 (define (si-stmt e)
   (match e
+    [(Assign (Var v) (HasType e t)) (si-stmt (Assign (Var v) e))]
     [(Assign (Var v) (Int i)) `(,(Instr 'movq `(,(Imm i) ,(Var v))))]
     [(Assign (Var v) (Bool b)) `(,(Instr 'movq `(,(si-atm (Bool b)) ,(Var v))))]
     [(Assign (Var v) (Var u)) `(,(Instr 'movq `(,(Var u) ,(Var v))))]
+    [(Assign (Var v) (GlobalValue g)) `(,(Instr 'movq `(,(Global g) ,(Var v))))]
+    [(Assign (Var v) (Void)) `(,(Instr 'movq `(,(Imm 0) ,(Var v))))]
     [(Assign (Var v) (Prim 'read '()))
      `(,(Callq `read_int 0)
         ,(Instr 'movq `(,(Reg 'rax) ,(Var v))))]
@@ -464,11 +469,11 @@
      (let ([tag (bitwise-ior 1 ; In FromSpace, not yet copied
                              (arithmetic-shift len 1) ; size of tuple
                              (arithmetic-shift (pmask t) 7))])
-       `(,(Instr 'movq `(,(Deref 'r11 (GlobalValue 'free_ptr))))
-          ,(Instr 'add1 `(,(* 8 (+ len 1)) ,(Deref 'r11 (GlobalValue 'free_ptr))))
+       `(,(Instr 'movq `(,(Deref 'rip (Global 'free_ptr)) ,(Reg 'r11)))
+          ,(Instr 'addq `(,(* 8 (+ len 1)) ,(Deref 'rip (Global 'free_ptr))))
           ,(Instr 'movq `(,(Imm tag) ,(Deref 'r11 0)))
           ,(Instr 'movq `(,(Reg 'r11) ,(Var v)))))]
-    [else (error "si-stmt passed non-statement expression : " e)]))
+    [else (error "si-stmt unhandled case : " e)]))
 
 (define (si-tail e)
   (match e
@@ -517,7 +522,7 @@
                `(,(Instr 'cmpq `(,a2 ,a1))
                   ,(JmpIf 'l l1)
                   ,(Jmp l2))))]
-    [else (error "si-tail passed non-tail expression : " e)]))
+    [else (error "si-tail unhandled case : " e)]))
 
 ; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
@@ -539,7 +544,7 @@
   (match (cdr label-block)
     [(Block info instrs)
      (map (add-edges-instr! g (car label-block)) instrs)]
-    [else (error "add-edges! passed bad argument : " label-block)]))
+    [else (error "add-edges! unhandled case " label-block)]))
 
 (define (build-cfg p)
   (match p
@@ -611,7 +616,7 @@
      (let* ([liveafter (ul-instrs (reverse instrs) `(,(set)) label->liveafter)]
             [_ (dict-set! label->liveafter l (car liveafter))])
        (cons l (Block (dict-set info 'live-after liveafter) instrs)))]
-    [else (error "ul-block passed non-block : " blk)]))
+    [else (error "ul-block unhandled case " blk)]))
 
 (define (uncover-live p)
   (match p
@@ -823,7 +828,7 @@
     [(Imm i) (string-append "$" (number->string i))]
     [(Reg r) (string-append "%" (symbol->string r))]
     [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
-    [else (error "print-x86-arg passed non-arg expr : " arg)]))
+    [else (error "print-x86-arg unhandled case " arg)]))
 
 (define (print-x86-args args)
   (match args
@@ -857,7 +862,7 @@
               (string-append "\t" (print-x86-instr instr) "\n" acc))
             ""
             instrs)]
-    [_ (error "print-x86-block passed non block value : " blk)]))
+    [_ (error "print-x86-block unhandled case " blk)]))
 
 (define (print-main-block stack-space used-callee)
   (string-append "main:\n"
