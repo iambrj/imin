@@ -19,7 +19,7 @@
     (map Reg r)))
 ; '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
 (define usable-registers
-  (let ([r '(rbx rcx rdx rsi rdi r8 r9 r10 r12 r13 r14 r15)])
+  (let ([r '(rbx rcx rdx rsi rdi r8 r9 r10 r12 r13 r14)])
     (map Reg r)))
 
 ;; Partial evaluation pass described in the book.
@@ -456,11 +456,11 @@
                   ,(Instr 'movzbq `(,(Reg 'al) ,(Var v))))))]
     [(Assign (Var x) (Prim 'vector-ref `(,v ,(Int n))))
      `(,(Instr 'movq `(,v ,(Reg 'r11)))
-        ,(Instr 'movq `(,(Deref 'r11 (- (* 8 (+ n 1)))) ,(Var x))))]
+        ,(Instr 'movq `(,(Deref 'r11 (* 8 (+ n 1))) ,(Var x))))]
     [(Assign (Var x) (Prim 'vector-set! `(,v ,(Int n) ,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,v ,(Reg 'r11)))
-          ,(Instr 'movq `(,a ,(Deref 'r11 (- (* 8 (+ n 1))))))
+          ,(Instr 'movq `(,a ,(Deref 'r11 (* 8 (+ n 1)))))
           ,(Instr 'movq `(,(Imm 0) ,(Var x)))))]
     ; Invariant : allocate is only called when it is guaranteed that there is
     ; enough space
@@ -469,10 +469,14 @@
      (let ([tag (bitwise-ior 1 ; In FromSpace, not yet copied
                              (arithmetic-shift len 1) ; size of tuple
                              (arithmetic-shift (pmask t) 7))])
-       `(,(Instr 'movq `(,(Deref 'rip (Global 'free_ptr)) ,(Reg 'r11)))
-          ,(Instr 'addq `(,(* 8 (+ len 1)) ,(Deref 'rip (Global 'free_ptr))))
+       `(,(Instr 'movq `(,(Global 'free_ptr) ,(Reg 'r11)))
+          ,(Instr 'addq `(,(Imm (* 8 (+ len 1))) ,(Global 'free_ptr)))
           ,(Instr 'movq `(,(Imm tag) ,(Deref 'r11 0)))
           ,(Instr 'movq `(,(Reg 'r11) ,(Var v)))))]
+    [(Assign (Var v) (Collect bytes))
+     `(,(Instr 'movq `(,(Reg 'r15) ,(Reg 'rdi)))
+        ,(Instr 'movq `(,(Imm bytes) ,(Reg 'rsi)))
+        ,(Callq 'collect 2))]
     [else (error "si-stmt unhandled case : " e)]))
 
 (define (si-tail e)
@@ -495,12 +499,12 @@
          ,(Jmp 'conclusion)))]
     [(Return (Prim 'vector-ref `(,v ,(Int n))))
      `(,(Instr 'movq `(,v ,(Reg 'r11)))
-        ,(Instr 'movq `(,(Deref 'r11 (- (* 8 (+ n 1)))) ,(Reg 'rax)))
+        ,(Instr 'movq `(,(Deref 'r11 (* 8 (+ n 1))) ,(Reg 'rax)))
         ,(Jmp 'conclusion))]
     [(Return (Prim 'vector-set! `(,v ,(Int n) ,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,v ,(Reg 'r11)))
-          ,(Instr 'movq `(,a ,(Deref 'r11 (- (* 8 (+ n 1))))))
+          ,(Instr 'movq `(,a ,(Deref 'r11 (* 8 (+ n 1)))))
           ,(Instr 'movq `(,(Imm 0) ,(Reg 'rax)))
           ,(Jmp 'conclusion)))]
     [(Seq stmt tail)
@@ -522,6 +526,13 @@
                `(,(Instr 'cmpq `(,a2 ,a1))
                   ,(JmpIf 'l l1)
                   ,(Jmp l2))))]
+    ; Invariant : grammar restricts to immediate integer references, don't have
+    ; to worry about expressions evaluating to integers
+    [(IfStmt (Prim 'vector-ref `(,v ,(Int i))) (Goto l1) (Goto l2))
+       `(,(Instr 'movq `(,v ,(Reg 'r11)))
+          ,(Instr 'cmpq `(,(Imm 1) ,(Deref 'r11 (* 8 (+ i 1)))))
+          ,(JmpIf 'e l1)
+          ,(Jmp l2))]
     [else (error "si-tail unhandled case : " e)]))
 
 ; select-instructions : C0 -> pseudo-x86
