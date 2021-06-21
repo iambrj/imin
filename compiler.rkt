@@ -1,3 +1,8 @@
+#|
+author : brj
+lives at : https://github.com/iambrj/imin
+|#
+
 #lang racket
 (require racket/set
          racket/stream
@@ -17,7 +22,12 @@
 (define arg-regs
   (let ([r '(rdi rsi rdx rcx r8 r9)])
     (map Reg r)))
-; '(rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+#|
+Register conventions
+rax -> temporary moves to tackle movqs with both stack args
+r11 -> vector-set, vector-ref
+r15 -> shadow stack top
+|#
 (define usable-registers
   (let ([r '(rbx rcx rdx rsi rdi r8 r9 r10 r12 r13 r14)])
     (map Reg r)))
@@ -601,7 +611,8 @@
 (define (ul-arg a)
   (match a
     [(or (Var _) (Reg _)) (set (byte->reg a))]
-    [(or (Bool _) (Int _) (Imm _)) (set)]))
+    [(Deref r _) (set (Reg r))]
+    [(or (Global _) (Bool _) (Int _) (Imm _)) (set)]))
 
 ; Lafter(n) = {}
 ; Lafter(k) =  Lbefore(k - 1)
@@ -643,11 +654,25 @@
                                order)])
        (X86Program info label-blocks))]))
 
-(define (bi-instr instr live-after g)
+(define (Vector? v)
+  (match v
+    [`(Vector . ,_) #t]
+    [else #f]))
+
+(define (bi-instr instr live-after g types)
   (match instr
     [(Instr 'movq `(,s ,d))
      (let ([_ (for ([v (set->list live-after)])
                 (unless (or (equal? v d) (equal? v s)) (add-edge! g d v)))])
+       g)]
+    [(Callq 'collect _)
+     (let* ([v-live (filter (lambda (x)
+                              (and (symbol? x)
+                                   (Vector? (dict-ref types x))))
+                            (set->list live-after))]
+            [_ (for* ([v v-live]
+                      [r callee-saved])
+                 (add-edge! g v r))])
        g)]
     [else (let* ([w (instr-w instr)]
                  [_ (for* ([d w]
@@ -655,13 +680,13 @@
                       (unless (equal? v d) (add-edge! g d v)))])
             g)]))
 
-(define ((bi-block g) blk)
+(define ((bi-block g types) blk)
   (match blk
     [(Block info instrs)
      (let* ([live-after (dict-ref info 'live-after)]
             [vertices (apply set-union live-after)]
             [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
-            [_ (for ([i instrs] [la live-after]) (bi-instr i la g))])
+            [_ (for ([i instrs] [la live-after]) (bi-instr i la g types))])
        ; Return (Block (dict-set info 'conflicts g) instrs) instead if want
        ; block-wise interference graphs
        g)]))
@@ -672,7 +697,8 @@
   (match p
     [(X86Program info label-blocks)
      (let* ([g (undirected-graph '())]
-            [_ (map (compose (bi-block g) cdr) label-blocks)])
+            [types (dict-ref info 'locals-types)]
+            [_ (map (compose (bi-block g types) cdr) label-blocks)])
        (X86Program (dict-set info 'conflicts g) label-blocks))]))
 
 (define (min-free-list l)
@@ -716,23 +742,42 @@
                                                             vertex->color v
                                                             color)))]))
 
+; returns var->mem, stack size, shadow stack size
 (define (var->mem var->color color->reg)
+  (printf "var->color : ~s\n" var->color)
   (let* ([maxcolor (apply max (dict-keys color->reg))]
-         [spilled->stk (foldr (lambda (k a)
-                                (if (> (dict-ref var->color k)
-                                       maxcolor)
-                                  (dict-set a k (- (dict-ref var->color k) maxcolor))
-                                  a))
+         [spilled-vars (filter (lambda (v)
+                                 (and (Var? v)
+                                      (> (dict-ref var->color v)
+                                         maxcolor)))
+                               (dict-keys var->color))]
+         [spilled-vecs (filter (lambda (v)
+                                 (and (Vector? v)
+                                      (> (dict-ref var->color v)
+                                         maxcolor)))
+                               (dict-keys var->color))]
+         [var->stk (foldr (lambda (v i a)
+                                  (dict-set a v i)
+                                  a)
                               '()
-                              (dict-keys var->color))]
-         [color->stk (foldr (lambda (color a)
-                              (dict-set a color (Deref 'rbp (* -8 color))))
-                            '()
-                            (dict-values spilled->stk))]
-         [color->reg (append color->reg color->stk)])
+                              spilled-vars
+                              (range 1 (add1 (length spilled-vars))))]
+         [vec->stk (foldr (lambda (v i a)
+                                  (dict-set a v i)
+                                  a)
+                              '()
+                              spilled-vecs
+                              (range 1 (add1 (length spilled-vecs))))])
     (values (dict-map var->color (lambda (v c)
-                                   `(,v . ,(dict-ref color->reg c))))
-            (length (dict-values spilled->stk)))))
+                                   `(,v . ,(if (Vector? v)
+                                             (if (member v spilled-vecs)
+                                               (dict-ref vec->stk v)
+                                               (dict-ref color->reg c))
+                                             (if (member v spilled-vars)
+                                               (dict-ref var->stk v)
+                                               (dict-ref color->reg c))))))
+            (length (dict-values var->stk))
+            (length (dict-values vec->stk)))))
 
 (define ((ar-arg var->mem) arg)
   (match arg
@@ -752,50 +797,53 @@
 (define (allocate-registers p)
   (match p
     [(X86Program info label-blocks)
-     (let*-values ([(g) (dict-ref info 'conflicts)]
-                   [(w) (filter Var? (get-vertices g))]
-                   [(r) (filter Reg? (get-vertices g))]
-                   [(vertex->color) (foldr (lambda (r a)
-                                             (if (member r usable-registers)
-                                               (dict-set a r (index-of
-                                                               usable-registers
-                                                               r))
-                                               a))
-                                           '()
-                                           r)]
-                   [(vertex->sat)
-                    (make-hash (foldr (lambda (v a)
-                                        (let* ([n (get-neighbors g v)]
-                                               [s (foldr (lambda (n a)
-                                                           (if (dict-has-key? vertex->color n)
-                                                             (set-union a (set (dict-ref vertex->color n)))
-                                                             a))
-                                                         (set)
-                                                         n)])
-                                          `((,v . ,s) . ,a))) '() w))]
-                   [(q)
-                    (make-pqueue (lambda (x1 x2)
-                                   (> (set-count (dict-ref vertex->sat x1))
-                                      (set-count (dict-ref vertex->sat x2)))))]
-                   [(vertex->node)
-                    (map (lambda (v) (cons v (pqueue-push! q v))) w)]
-                   [(vertex->color)
-                    (color-graph g q w vertex->sat vertex->node vertex->color)]
-                   [(var->mem stack-space)
-                    (var->mem vertex->color (map (lambda (r)
-                                                   (cons (index-of usable-registers r) r))
-                                                 usable-registers))]
-                   [(used-callee) (filter (lambda (r)
-                                            (member r callee-saved))
-                                          (remove-duplicates (dict-values var->mem)))])
-       (X86Program (dict-set* info
-                              'stack-space stack-space
-                              'var->mem var->mem
-                              'used-callee used-callee)
-                   (map (lambda (label-block)
-                          (cons (car label-block)
-                                ((ar-block var->mem) (cdr label-block))))
-                        label-blocks)))]))
+     (let* ([g (dict-ref info 'conflicts)]
+            [v (filter Var? (get-vertices g))]
+            [r (filter Reg? (get-vertices g))]
+            [vertex->color (foldr (lambda (r a)
+                                    (if (member r usable-registers)
+                                      (dict-set a r (index-of
+                                                      usable-registers
+                                                      r))
+                                      a))
+                                  '()
+                                  r)]
+            [vertex->sat
+              (make-hash (foldr (lambda (v a)
+                                  (let* ([n (get-neighbors g v)]
+                                         [s (foldr (lambda (n a)
+                                                     (if (dict-has-key? vertex->color n)
+                                                       (set-union a (set (dict-ref vertex->color n)))
+                                                       a))
+                                                   (set)
+                                                   n)])
+                                    `((,v . ,s) . ,a))) '() v))]
+            [q
+              (make-pqueue (lambda (x1 x2)
+                             (> (set-count (dict-ref vertex->sat x1))
+                                (set-count (dict-ref vertex->sat x2)))))]
+            [vertex->node
+              (map (lambda (v) (cons v (pqueue-push! q v))) v)]
+            [vertex->color
+              (color-graph g q v vertex->sat vertex->node
+                           vertex->color)])
+       (let*-values ([(var->mem stack-space shadow-stack-space)
+                      (var->mem vertex->color
+                                (map (lambda (r)
+                                       (cons (index-of usable-registers r) r))
+                                     usable-registers))]
+                     [(used-callee)
+                      (filter (lambda (r)
+                                (member r callee-saved))
+                              (remove-duplicates (dict-values var->mem)))])
+         (X86Program (dict-set* info
+                                'stack-space stack-space
+                                'var->mem var->mem
+                                'used-callee used-callee)
+                     (map (lambda (label-block)
+                            (cons (car label-block)
+                                  ((ar-block var->mem) (cdr label-block))))
+                          label-blocks))))]))
 
 (define (trivial-mov instr)
   (match instr
