@@ -2,9 +2,15 @@
 #lang racket
 
 (require "utilities.rkt"
-         "interp-Rvec.rkt"
          "interp-Rvec-prime.rkt"
+         "interp-Rvec.rkt"
          "type-check-Rvec.rkt"
+         "interp-Cvec.rkt"
+         "type-check-Cvec.rkt"
+         "interp-Rif.rkt"
+         "type-check-Rif.rkt"
+         "interp-Cif.rkt"
+         "type-check-Cif.rkt"
          "interp.rkt"
          "compiler.rkt")
 ;; (debug-level 1)
@@ -16,7 +22,15 @@
 (define passes
   `(("shrink" ,shrink ,interp-Rvec ,type-check-Rvec)
     ("expose allocation" ,expose-allocation ,interp-Rvec-prime ,type-check-Rvec)
-    ))
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Rvec-prime ,type-check-Rvec)
+    ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
+    ("select instructions" ,select-instructions ,interp-pseudo-x86-2)
+    ("build cfg" ,build-cfg ,interp-pseudo-x86-2)
+    ("uncover live" ,uncover-live ,interp-pseudo-x86-2)
+    ("build interference" ,build-interference ,interp-pseudo-x86-2)
+    ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
+    ("patch instructions" ,patch-instructions ,interp-pseudo-x86-2)
+    ("print x86" ,print-x86 #f)))
 #;(define passes
   `(("shrink" ,shrink ,interp-Rif ,type-check-Rif)
     ("uniquify" ,uniquify ,interp-Rif ,type-check-Rif)
@@ -46,8 +60,10 @@
          all-tests)))
 
 (debug-level 1)
+;(interp-tests "cond" type-check-Rif passes interp-Rvec "cond_test" (tests-for "cond"))
 (interp-tests "vec" type-check-Rvec passes interp-Rvec "vectors_test" (tests-for "vectors"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-; (compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
+;(compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
+(compiler-tests "vectors" type-check-Rvec passes "vectors_test" (tests-for "vectors"))

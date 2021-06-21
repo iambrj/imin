@@ -943,7 +943,7 @@ r15 -> shadow stack top
                  "\tmovq $16384, %rdi\n"
                  "\tmovq $16384, %rsi\n"
                  "\tcallq initialize\n"
-                 "\tmovq root_stack_begin(%rip), %r15\n"
+                 "\tmovq rootstack_begin(%rip), %r15\n"
                  "\tmovq $0, %r15\n"
                  "\taddq $" (number->string sstack-space) ", %r15\n"
                  "\tjmp start\n"))
