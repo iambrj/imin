@@ -827,7 +827,7 @@ r15 -> shadow stack top
             [vertex->color
               (color-graph g q v vertex->sat vertex->node
                            vertex->color)])
-       (let*-values ([(var->mem stack-space shadow-stack-space)
+       (let*-values ([(var->mem stack-space sstack-space)
                       (var->mem vertex->color
                                 (map (lambda (r)
                                        (cons (index-of usable-registers r) r))
@@ -838,6 +838,7 @@ r15 -> shadow stack top
                               (remove-duplicates (dict-values var->mem)))])
          (X86Program (dict-set* info
                                 'stack-space stack-space
+                                'sstack-space stack-space
                                 'var->mem var->mem
                                 'used-callee used-callee)
                      (map (lambda (label-block)
@@ -884,6 +885,7 @@ r15 -> shadow stack top
 
 (define (print-x86-arg arg)
   (match arg
+    [(Global x) (string-append (symbol->string x) "(%rip)")]
     [(Imm i) (string-append "$" (number->string i))]
     [(Reg r) (string-append "%" (symbol->string r))]
     [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
@@ -923,7 +925,7 @@ r15 -> shadow stack top
             instrs)]
     [_ (error "print-x86-block unhandled case " blk)]))
 
-(define (print-main-block stack-space used-callee)
+(define (print-main-block stack-space sstack-space used-callee)
   (string-append "main:\n"
                  "\tpushq %rbp\n"
                  (apply string-append
@@ -938,10 +940,17 @@ r15 -> shadow stack top
                                                                16))
                                               stack-space
                                               (+ 8 stack-space))) ", %rsp\n"
+                 "\tmovq $16384, %rdi\n"
+                 "\tmovq $16384, %rsi\n"
+                 "\tcallq initialize\n"
+                 "\tmovq root_stack_begin(%rip), %r15\n"
+                 "\tmovq $0, %r15\n"
+                 "\taddq $" (number->string sstack-space) ", %r15\n"
                  "\tjmp start\n"))
 
-(define (print-conclusion-block stack-space used-callee)
+(define (print-conclusion-block stack-space sstack-space used-callee)
   (string-append "conclusion:\n"
+                 "\tsubq $" (number->string sstack-space) ", %r15\n"
                  "\taddq $" (number->string (if (zero? (modulo (+ stack-space
                                                                   (* 8 (length used-callee)))
                                                                16))
@@ -961,9 +970,10 @@ r15 -> shadow stack top
   (match p
     [(X86Program info label-blocks)
      (let* ([stack-space (dict-ref info 'stack-space)]
+            [sstack-space (dict-ref info 'sstack-space)]
             [used-callee (dict-ref info 'used-callee)]
-            [main (print-main-block stack-space used-callee)]
-            [conclusion (print-conclusion-block stack-space used-callee)]
+            [main (print-main-block stack-space sstack-space used-callee)]
+            [conclusion (print-conclusion-block stack-space sstack-space used-callee)]
             [label-blocks (foldl (lambda (label-block acc)
                                    (string-append (symbol->string (car label-block)) ":\n"
                                                   (print-x86-block (cdr label-block))
