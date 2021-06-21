@@ -70,6 +70,10 @@ r15 -> shadow stack top
      (Prim op (map shrink-exp es))]
     [(Prim 'vector-ref `(,e ,(Int i)))
      (Prim 'vector-ref `(,(shrink-exp e) ,(Int i)))]
+    [(Apply fun arg*)
+     (Apply (shrink-exp fun) (map shrink-exp arg*))]
+    [(Def name param* rty info e)
+     (Def name param* rty info (shrink-exp e))]
     [(Prim 'vector-set! `(,e1 ,(Int i) ,e2))
      (Prim 'vector-set! `(,(shrink-exp e1) ,(Int i) ,(shrink-exp e2)))]
     ; (and e1 e1) == (if e1 e2 #f)
@@ -105,8 +109,8 @@ r15 -> shadow stack top
 
 (define (shrink p)
   (match p
-    [(Program info e)
-     (Program info (shrink-exp e))]))
+    [(ProgramDefsExp info defs e)
+     (ProgramDefs info (append defs `(,(Def 'main '() 'Integer '() (shrink-exp e)))))]))
 
 (define (ccollect bytes)
   (If (Prim '< `(,(Prim '+ `(,(HasType (GlobalValue 'free_ptr) 'Integer) ,(Int bytes)))
