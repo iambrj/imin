@@ -365,7 +365,7 @@ r15 -> shadow stack top
     [(Var v)    (values (Var v) '())]
     [(Bool b)   (values (Bool b) '())]
     [(HasType e t) #:when (atom? e)
-     (values (HasType e t) e)]
+     (values (HasType e t) '())]
     [(HasType e t)
      (let-values ([(atm env) (rco-atm e)])
        ; Invariant : atm is *always* a (gensym 'tmp), since other cases are
@@ -387,6 +387,9 @@ r15 -> shadow stack top
                                      (cons atm env))
                                    rco-atm) fun)]
             [fun-atm (car fun-atm-env)]
+            [fun-atm (if (symbol? fun-atm)
+                       (Var fun-atm)
+                       fun-atm)]
             [fun-env (cdr fun-atm-env)]
             [arg-atm-env* (map (compose (lambda (atm env)
                                           (cons atm env))
@@ -445,6 +448,7 @@ r15 -> shadow stack top
     [(Allocate bytes t) (Allocate bytes t)]
     [(Collect bytes)    (Collect bytes)]
     [(GlobalValue var)  (GlobalValue var)]
+    ; Invariant : f is always a symbol
     [(FunRef f)         (FunRef f)]
     [(Apply fun arg*)
      (let* ([tmp (gensym 'tmp)]
@@ -453,7 +457,7 @@ r15 -> shadow stack top
                                    rco-atm) fun)]
             [fun-atm (car fun-atm-env)]
             [fun-atm (if (symbol? fun-atm)
-                       (FunRef fun-atm)
+                       (Var fun-atm)
                        fun-atm)]
             [fun-env (cdr fun-atm-env)]
             [arg-atm-env* (map (compose (lambda (atm env)
@@ -962,7 +966,6 @@ r15 -> shadow stack top
 
 ; returns var->mem, stack size, shadow stack size
 (define (var->mem var->color color->reg)
-  (printf "var->color : ~s\n" var->color)
   (let* ([maxcolor (apply max (dict-keys color->reg))]
          [spilled-vars (filter (lambda (v)
                                  (and (Var? v)
