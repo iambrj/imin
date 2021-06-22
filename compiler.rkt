@@ -109,8 +109,8 @@ r15 -> shadow stack top
 
 (define (shrink p)
   (match p
-    [(ProgramDefsExp info defs e)
-     (ProgramDefs info (append defs `(,(Def 'main '() 'Integer '() (shrink-exp e)))))]))
+    [(ProgramDefsExp info def* e)
+     (ProgramDefs info (append def* `(,(Def 'main '() 'Integer '() (shrink-exp e)))))]))
 
 (define ((rf-exp funs) e)
   (match e
@@ -134,12 +134,12 @@ r15 -> shadow stack top
 
 (define (reveal-functions p)
   (match p
-    [(ProgramDefs info defs)
-     (let ([funs (map Def-name defs)])
+    [(ProgramDefs info def*)
+     (let ([funs (map Def-name def*)])
        (ProgramDefs info (map (lambda (d)
                                 (struct-copy Def d
                                              [body ((rf-exp funs) (Def-body d))]))
-                              defs)))]))
+                              def*)))]))
 
 (define ((update-body vec vectorized) body)
   (if (not (null? vectorized))
@@ -225,12 +225,12 @@ r15 -> shadow stack top
 
 (define (limit-functions p)
   (match p
-    [(ProgramDefs info defs)
-     (let ([defs (map limit-def defs)])
+    [(ProgramDefs info def*)
+     (let ([def* (map limit-def def*)])
        (ProgramDefs info (map (lambda (d)
                                 (struct-copy Def d
                                              [body (limit-calls (Def-body d))]))
-                              defs)))]))
+                              def*)))]))
 
 (define (ccollect bytes)
   (If (Prim '< `(,(Prim '+ `(,(HasType (GlobalValue 'free_ptr) 'Integer) ,(Int bytes)))
@@ -244,10 +244,12 @@ r15 -> shadow stack top
 ; 4. Initalize vector
 (define (ea-exp e)
   (match e
-    [(Void)   (Void)]
-    [(Int i)  (Int i)]
-    [(Bool b) (Bool b)]
-    [(Var v)  (Var v)]
+    [(Void)           (Void)]
+    [(Int i)          (Int i)]
+    [(Bool b)         (Bool b)]
+    [(Var v)          (Var v)]
+    [(FunRef f)       (FunRef f)]
+    [(Apply fun arg*) (Apply (ea-exp fun) (map ea-exp arg*))]
     [(HasType (Prim 'vector es) t)
      (let* ([vname (gensym 'v)]
             [len (length es)]
@@ -282,14 +284,26 @@ r15 -> shadow stack top
 
 (define (expose-allocation p)
   (match p
-    [(Program info e)
-     (Program info (ea-exp e))]))
+    [(ProgramDefs info def*)
+     (ProgramDefs info
+                  (map (lambda (d)
+                         (struct-copy Def d
+                                      [body (ea-exp (Def-body d))]))
+                       def*))]))
 
 (define ((uniquify-exp env) e)
   (match e
-    [(Var x)  (Var (dict-ref env x))]
-    [(Int n)  (Int n)]
-    [(Bool b) (Bool b)]
+    [(Void)           (Void)]
+    [(Var x)          (Var (dict-ref env x))]
+    [(Int n)          (Int n)]
+    [(Bool b)         (Bool b)]
+    [(FunRef f)       (FunRef f)]
+    [(GlobalValue g)  (GlobalValue g)]
+    [(Allocate l t)   (Allocate l t)]
+    [(Collect bytes)  (Collect bytes)]
+    [(Apply fun arg*) (Apply ((uniquify-exp env) fun)
+                             (map (uniquify-exp env) arg*))]
+    [(HasType e t)    (HasType ((uniquify-exp env) e) t)]
     [(If c t e)
      (let ([u (uniquify-exp env)])
        (If (u c) (u t) (u e)))]
@@ -302,9 +316,34 @@ r15 -> shadow stack top
     [(Prim op es)
      (Prim op (for/list ([e es]) ((uniquify-exp env) e)))]))
 
+(define (param-name p)
+  (match p
+    [`(,x : ,_) x]
+    [else (error "param-name passed non-param : " p)]))
+
+(define (param-type p)
+  (match p
+    [`(,_ : ,t) t]
+    [else (error "param-type passed non-param : " p)]))
+
 (define (uniquify p)
   (match p
-    [(Program info e) (Program info ((uniquify-exp '()) e))]))
+    [(ProgramDefs info def*)
+     (let ([fun* (foldr (lambda (def a)
+                          (cons (cons def def) a))
+                        '()
+                        def*)])
+       (ProgramDefs info
+                    (map (lambda (d)
+                           (let ([param* (foldr (lambda (param a)
+                                                  (cons (cons (param-name param)
+                                                              (param-name param)) a))
+                                                '()
+                                                (Def-param* d))])
+                             (struct-copy Def d
+                                          [body ((uniquify-exp (append fun*
+                                                                       param*)) (Def-body d))])))
+                         def*)))]))
 
 (define (atom? x)
   (or (Int? x)
@@ -321,10 +360,10 @@ r15 -> shadow stack top
 ; returns atomic expression, new env
 (define (rco-atm e)
   (match e
-    [(Void)   (values (Void) '())]
-    [(Int i)  (values (Int i) '())]
-    [(Var v)  (values (Var v) '())]
-    [(Bool b) (values (Bool b) '())]
+    [(Void)     (values (Void) '())]
+    [(Int i)    (values (Int i) '())]
+    [(Var v)    (values (Var v) '())]
+    [(Bool b)   (values (Bool b) '())]
     [(HasType e t) #:when (atom? e)
      (values (HasType e t) e)]
     [(HasType e t)
@@ -342,6 +381,31 @@ r15 -> shadow stack top
     [(Allocate bytes t)
      (let ([tmp (gensym 'tmp)])
        (values tmp `((,tmp . ,(Allocate bytes t)))))]
+    [(Apply fun arg*)
+     (let* ([tmp (gensym 'tmp)]
+            [fun-atm-env ((compose (lambda (atm env)
+                                     (cons atm env))
+                                   rco-atm) fun)]
+            [fun-atm (car fun-atm-env)]
+            [fun-env (cdr fun-atm-env)]
+            [arg-atm-env* (map (compose (lambda (atm env)
+                                          (cons atm env))
+                                        rco-atm)
+                               arg*)]
+            [arg-env* (filter-map (lambda (x)
+                                    (and (not (empty? (cdr x)))
+                                         (cdr x))) arg-atm-env*)]
+            [arg-atm* (map (compose (lambda (atm)
+                                      (if (symbol? atm)
+                                        (Var atm)
+                                        atm))
+                                    car)
+                           arg-atm-env*)])
+       (values tmp (append (apply append (cons fun-env arg-env*))
+                           `((,tmp . ,(Apply fun-atm arg-atm*))))))]
+    [(FunRef f)
+     (let ([tmp (gensym 'tmp)])
+       (values tmp `((,tmp . ,(FunRef f)))))]
     [(Prim op es)
      (let* ([tmp (gensym 'tmp)]
             [atm-envs (map (compose (lambda (atm env)
@@ -381,6 +445,32 @@ r15 -> shadow stack top
     [(Allocate bytes t) (Allocate bytes t)]
     [(Collect bytes)    (Collect bytes)]
     [(GlobalValue var)  (GlobalValue var)]
+    [(FunRef f)         (FunRef f)]
+    [(Apply fun arg*)
+     (let* ([tmp (gensym 'tmp)]
+            [fun-atm-env ((compose (lambda (atm env)
+                                     (cons atm env))
+                                   rco-atm) fun)]
+            [fun-atm (car fun-atm-env)]
+            [fun-atm (if (symbol? fun-atm)
+                       (FunRef fun-atm)
+                       fun-atm)]
+            [fun-env (cdr fun-atm-env)]
+            [arg-atm-env* (map (compose (lambda (atm env)
+                                          (cons atm env))
+                                        rco-atm)
+                               arg*)]
+            [arg-env* (filter-map (lambda (x)
+                                    (and (not (empty? (cdr x)))
+                                         (cdr x))) arg-atm-env*)]
+            [arg-atm* (map (compose (lambda (atm)
+                                      (if (symbol? atm)
+                                        (Var atm)
+                                        atm))
+                                    car)
+                           arg-atm-env*)])
+       (build-lets (apply append (cons fun-env arg-env*))
+                   (Apply fun-atm arg-atm*)))]
     [(Prim op es)
      (let* ([atm-envs (map (compose (lambda (a e)
                                       (cons a e))
@@ -405,8 +495,12 @@ r15 -> shadow stack top
 ; arguments of operations are atomic
 (define (remove-complex-opera* p)
   (match p
-    [(Program info e)
-     (Program info (rco-exp e))]))
+    [(ProgramDefs info def*)
+     (ProgramDefs info
+                  (map (lambda (d)
+                         (struct-copy Def d
+                                      [body (rco-exp (Def-body d))]))
+                       def*))]))
 
 ; c1 = Assign_1, Assign_2, ..., Assign_k, Ret1
 ; c2 = Assign_(k + 1), ..., Ret2
