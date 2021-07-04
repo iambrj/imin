@@ -76,7 +76,7 @@ r15 -> shadow stack top
      (Apply (shrink-exp fun) (map shrink-exp arg*))]
     [(Def name param* rty info e)
      (Def name param* rty info (shrink-exp e))]
-    ; (and e1 e1) == (if e1 e2 #f)
+    ; (and e1 e2) == (if e1 e2 #f)
     [(Prim 'and `(,e1 ,e2))
      (let ([e1 (shrink-exp e1)]
            [e2 (shrink-exp e2)])
@@ -534,7 +534,7 @@ r15 -> shadow stack top
 (define (base? e)
   (match e
     [(or (Void) (Bool _) (Int _) (Var _) (Allocate _ _) (GlobalValue _)
-           (Prim _ _) (Collect _))
+           (Prim _ _) (Collect _) (FunRef _))
        #t]
     [else #f]))
 
@@ -550,6 +550,7 @@ r15 -> shadow stack top
      (delay (make-ifstmt (Prim 'eq? `(,(Var x) ,(Bool #t))) t e label->block))]
     [(Prim op es) #:when (member op '(eq? < vector-ref))
      (delay (make-ifstmt (Prim op es) t e label->block))]
+    [(Apply fun arg*) (delay (Call fun arg*))]
     [(Prim 'not `(,c))
      (explicate-pred c e t label->block)]
     [(Let x rhs body)
@@ -576,6 +577,10 @@ r15 -> shadow stack top
                              (HasType rhs annotate)
                              rhs))
                    (force cont)))]
+    [(Apply fun arg*)
+     (delay (Seq (Assign (Var x)
+                         (Call fun arg*))
+                 (force cont)))]
     [(Let y rhs body)
      (let ([body (explicate-assign body x cont label->block)])
        (explicate-assign rhs y body label->block))]
@@ -591,6 +596,8 @@ r15 -> shadow stack top
   (match e
     [_ #:when(base? e)
      (delay (Return e))]
+    [(Apply fun arg*)
+     (TailCall fun arg*)]
     [(Let x rhs body)
      (explicate-assign rhs x (explicate-tail body label->block) label->block)]
     [(If c t e)
@@ -601,16 +608,24 @@ r15 -> shadow stack top
     [(HasType e t) (HasType (explicate-tail e label->block) t)]
     [else (error "explicate-tail unhandled case " e)]))
 
+(define (ec-def d)
+  (match d
+    [(Def name param* rty info e)
+     (let* ([label->block (make-hash)]
+            [tail (explicate-tail e label->block)]
+            [_ (dict-set! label->block
+                          (string->symbol (string-append (symbol->string name)
+                                                         "start"))
+                          (force tail))])
+       (Def name param* rty info (hash->list label->block)))]))
+
 ; Stuff that lazy evaluation achieves
 ; 1. Avoids duplicate block generation
 ; 2. Avoids unreachable block generation aka constant folding over booleans
 (define (explicate-control p)
   (match p
-    [(Program info body)
-     (let* ([label->block (make-hash)]
-            [tail (explicate-tail body label->block)]
-            [_ (dict-set! label->block 'start (force tail))])
-       (CProgram info (hash->list label->block)))]))
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map ec-def def*))]))
 
 (define (pmask t [mask 0])
   (match t

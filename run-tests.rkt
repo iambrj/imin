@@ -5,6 +5,8 @@
          "interp-Rfun.rkt"
          "interp-Rfun-prime.rkt"
          "type-check-Rfun.rkt"
+         "interp-Cfun.rkt"
+         "type-check-Cfun.rkt"
          "interp.rkt"
          "compiler.rkt")
 ;; (debug-level 1)
@@ -17,9 +19,10 @@
   `(("shrink" ,shrink ,interp-Rfun ,type-check-Rfun)
     ("reveal functions" ,reveal-functions ,interp-Rfun-prime ,type-check-Rfun)
     ("limit functions" ,limit-functions ,interp-Rfun-prime ,type-check-Rfun)
-    #;("expose allocation" ,expose-allocation ,interp-Rfun-prime ,type-check-Rfun)
-    #;("remove complex opera*" ,remove-complex-opera* ,interp-Rfun-prime ,type-check-Rfun)
-    #;("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
+    ("expose allocation" ,expose-allocation ,interp-Rfun-prime ,type-check-Rfun)
+    ("uniquify" ,uniquify ,interp-Rfun-prime ,type-check-Rfun)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Rfun-prime ,type-check-Rfun)
+    ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
     #;("select instructions" ,select-instructions ,interp-pseudo-x86-2)
     #;("build cfg" ,build-cfg ,interp-pseudo-x86-2)
     #;("uncover live" ,uncover-live ,interp-pseudo-x86-2)
