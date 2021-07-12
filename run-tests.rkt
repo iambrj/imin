@@ -25,10 +25,10 @@
     ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
     ("select instructions" ,select-instructions ,interp-pseudo-x86-3)
     ("build cfg" ,build-cfg ,interp-pseudo-x86-3)
-    #;("uncover live" ,uncover-live ,interp-pseudo-x86-2)
-    #;("build interference" ,build-interference ,interp-pseudo-x86-2)
-    #;("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
-    #;("patch instructions" ,patch-instructions ,interp-pseudo-x86-2)
+    ("uncover live" ,uncover-live ,interp-pseudo-x86-3)
+    #;("build interference" ,build-interference ,interp-pseudo-x86-3)
+    #;("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
+    #;("patch instructions" ,patch-instructions ,interp-pseudo-x86-3)
     #;("print x86" ,print-x86 #f)))
 
 #;(define passes

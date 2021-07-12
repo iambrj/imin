@@ -863,13 +863,11 @@ r15 -> shadow stack top
 
 (define (instr-w instr)
   (match instr
-    [(Instr i `(,_ ,a2)) #:when (member i '(movq addq subq xorq movzbq set))
+    [(Instr i `(,_ ,a2)) #:when (member i '(movq addq subq xorq movzbq set leaq))
      (ul-arg (byte->reg a2))]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
-    [(Instr 'cmpq _) (set)]
-    [(Jmp _) (set)]
-    [(JmpIf _ _) (set)]
-    [(Callq _ _) (list->set caller-saved)]
+    [(or (Jmp _) (JmpIf _ _) (Instr 'cmpq _)) (set)]
+    [(or (TailJmp _ _) (Callq _ _)) (list->set caller-saved)]
     [else (error "instr-w missing case : " instr)]))
 
 (define (instr-r instr)
@@ -879,8 +877,8 @@ r15 -> shadow stack top
     [(Instr i `(,a1 ,_)) #:when (member i '(movq subq movzbq))
      (ul-arg a1)]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
-    [(Instr 'set _) (set)]
-    [(Callq _ i) (list->set (take callee-saved i))]
+    [(or (TailJmp _ i) (IndirectCallq _ i) (Callq _ i)) (list->set (take callee-saved i))]
+    [(or (Instr 'leaq _) (Instr 'set _)) (set)]
     [else (error "instr-r missing case : " instr)]))
 
 (define (ul-arg a)
@@ -915,19 +913,32 @@ r15 -> shadow stack top
        (cons l (Block (dict-set info 'live-after liveafter) instrs)))]
     [else (error "ul-block unhandled case " blk)]))
 
-(define (uncover-live p)
-  (match p
-    [(X86Program info label-blocks)
+(define (conclusion? c)
+  (let ([c (symbol->string c)])
+    (string-suffix? c "conclusion")))
+
+(define (ul-def d)
+  (match d
+    [(Def name param* rty info label-block*)
      (let* ([cfg (dict-ref info 'cfg)]
             ; conclusion is always last, remove it since not yet generated
-            [order (cdr (tsort (transpose cfg)))]
-            [label->liveafter (make-hash `((conclusion . ,(set (Reg 'rax) (Reg 'rsp)))))]
-            [label-blocks (map (lambda (label)
+            ; XXX : Hardcoded conclusion block naming convention
+            [labels (filter (compose not conclusion?) (tsort (transpose cfg)))]
+            [c (string->symbol (string-append (symbol->string name)
+                                              "conclusion"))]
+            [label->liveafter (make-hash `((,c . ,(set (Reg 'rax) (Reg 'rsp)))))]
+            [_ (printf "LABEL-LIVEAFTER\n~s\n" label->liveafter)]
+            [label-block* (map (lambda (label)
                                  (ul-block label
-                                           (dict-ref label-blocks label)
+                                           (dict-ref label-block* label)
                                            label->liveafter))
-                               order)])
-       (X86Program info label-blocks))]))
+                               labels)])
+       (Def name param* rty info label-block*))]))
+
+(define (uncover-live p)
+  (match p
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map ul-def def*))]))
 
 (define (Vector? v)
   (match v
