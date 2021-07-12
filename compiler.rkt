@@ -19,7 +19,7 @@ lives at : https://github.com/iambrj/imin
 (define callee-saved
   (let ([r '(rsp rbp rbx r12 r13 r14 r15)])
     (map Reg r)))
-(define arg-regs
+(define param-reg*
   (let ([r '(rdi rsi rdx rcx r8 r9)])
     (map Reg r)))
 #|
@@ -132,6 +132,7 @@ r15 -> shadow stack top
     [(Apply fun arg*)
      (Apply ((rf-exp funs) fun) (map (rf-exp funs) arg*))]))
 
+; Transform function references from just f to (FunRef f)
 (define (reveal-functions p)
   (match p
     [(ProgramDefs info def*)
@@ -612,11 +613,10 @@ r15 -> shadow stack top
   (match d
     [(Def name param* rty info e)
      (let* ([label->block (make-hash)]
-            [tail (explicate-tail e label->block)]
             [_ (dict-set! label->block
                           (string->symbol (string-append (symbol->string name)
                                                          "start"))
-                          (force tail))])
+                          (force (explicate-tail e label->block)))])
        (Def name param* rty info (hash->list label->block)))]))
 
 ; Stuff that lazy evaluation achieves
@@ -724,39 +724,49 @@ r15 -> shadow stack top
      `(,(Instr 'movq `(,(Reg 'r15) ,(Reg 'rdi)))
         ,(Instr 'movq `(,(Imm bytes) ,(Reg 'rsi)))
         ,(Callq 'collect 2))]
+    [(Assign (Var v) (FunRef f))
+     `(,(Instr 'leaq `(,(FunRef f) ,(Var v))))]
+    [(Assign (Var v) (Call fun arg*))
+     (let ([movs (map (lambda (idx)
+                        (Instr 'movq `(,(si-atm (list-ref arg* idx))
+                                        ,(list-ref param-reg* idx))))
+                      (range 0 (length arg*)))])
+       (append movs
+               `(,(IndirectCallq fun (length arg*))
+                  ,(Instr 'movq `(,(Reg 'rax) ,(Var v))))))]
     [else (error "si-stmt unhandled case : " e)]))
 
-(define (si-tail e)
+(define (si-tail e c)
   (match e
-    [(Return (Var v))  `(,(Instr 'movq `(,(Var v) ,(Reg 'rax))) ,(Jmp 'conclusion))]
-    [(Return (Int i))  `(,(Instr 'movq `(,(Imm i) ,(Reg 'rax))) ,(Jmp 'conclusion))]
+    [(Return (Var v))  `(,(Instr 'movq `(,(Var v) ,(Reg 'rax))) ,(Jmp c))]
+    [(Return (Int i))  `(,(Instr 'movq `(,(Imm i) ,(Reg 'rax))) ,(Jmp c))]
     [(Return (Prim 'read '()))
      `(,(Callq 'read_int 0)
-        ,(Jmp 'conclusion))]
+        ,(Jmp c))]
     [(Return (Prim '- `(,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,a ,(Reg 'rax)))
-         ,(Instr 'negq `(,(Reg 'rax)))
-         ,(Jmp 'conclusion)))]
+          ,(Instr 'negq `(,(Reg 'rax)))
+          ,(Jmp c)))]
     [(Return (Prim '+ `(,a1 ,a2)))
      (let ([a1 (si-atm a1)]
            [a2 (si-atm a2)])
        `(,(Instr 'movq `(,a1 ,(Reg 'rax)))
-         ,(Instr 'addq `(,a2 ,(Reg 'rax)))
-         ,(Jmp 'conclusion)))]
+          ,(Instr 'addq `(,a2 ,(Reg 'rax)))
+          ,(Jmp c)))]
     [(Return (Prim 'vector-ref `(,v ,(Int n))))
      `(,(Instr 'movq `(,v ,(Reg 'r11)))
         ,(Instr 'movq `(,(Deref 'r11 (* 8 (+ n 1))) ,(Reg 'rax)))
-        ,(Jmp 'conclusion))]
+        ,(Jmp c))]
     [(Return (Prim 'vector-set! `(,v ,(Int n) ,a)))
      (let ([a (si-atm a)])
        `(,(Instr 'movq `(,v ,(Reg 'r11)))
           ,(Instr 'movq `(,a ,(Deref 'r11 (* 8 (+ n 1)))))
           ,(Instr 'movq `(,(Imm 0) ,(Reg 'rax)))
-          ,(Jmp 'conclusion)))]
+          ,(Jmp c)))]
     [(Seq stmt tail)
      (let ([s (si-stmt stmt)]
-           [t (si-tail tail)])
+           [t (si-tail tail c)])
        (append s t))]
     [(Goto l) `(,(Jmp l))]
     [(IfStmt (Prim 'eq? `(,a1 ,a2)) (Goto l1) (Goto l2))
@@ -776,19 +786,45 @@ r15 -> shadow stack top
     ; Invariant : grammar restricts to immediate integer references, don't have
     ; to worry about expressions evaluating to integers
     [(IfStmt (Prim 'vector-ref `(,v ,(Int i))) (Goto l1) (Goto l2))
-       `(,(Instr 'movq `(,v ,(Reg 'r11)))
-          ,(Instr 'cmpq `(,(Imm 1) ,(Deref 'r11 (* 8 (+ i 1)))))
-          ,(JmpIf 'e l1)
-          ,(Jmp l2))]
+     `(,(Instr 'movq `(,v ,(Reg 'r11)))
+        ,(Instr 'cmpq `(,(Imm 1) ,(Deref 'r11 (* 8 (+ i 1)))))
+        ,(JmpIf 'e l1)
+        ,(Jmp l2))]
+    [(TailCall fun arg*)
+     (let ([movs (map (lambda (idx)
+                        (Instr 'movq `(,(si-atm (list-ref arg* idx))
+                                        ,(list-ref param-reg* idx))))
+                      (range 0 (length arg*)))])
+       (append movs
+               `(,(TailJmp fun (length arg*)))))]
     [else (error "si-tail unhandled case : " e)]))
+
+(define (si-def d)
+  (match d
+    [(Def name param* rty info label-tails)
+     (let* ([param* (map param-name param*)]
+            [arg-movs (map (lambda (idx)
+                             (Instr 'movq `(,(list-ref param-reg* idx)
+                                             ,(Var (list-ref param* idx)))))
+                           (range 0 (length param*)))]
+            [s (string->symbol (string-append (symbol->string name)
+                                              "start"))]
+            [c (string->symbol (string-append (symbol->string name)
+                                              "conclusion"))]
+            [start-block `(,s . ,(Block '() (append arg-movs (si-tail (dict-ref label-tails s) c))))]
+            [rest-blocks (map (lambda (label-tail)
+                                (let ([label (car label-tail)]
+                                      [tail (cdr label-tail)])
+                                  `(,label . ,(Block '() (si-tail tail c)))))
+                              (dict-remove label-tails s))]
+            [label-blocks `(,start-block . ,rest-blocks)])
+       (Def name param* 'Integer (cons `(num-params . ,(length param*)) info) label-blocks))]))
 
 ; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
   (match p
-    [(CProgram info label-tails)
-     (let* ([label-blocks (map (lambda (label-tail)
-                                 `(,(car label-tail) . ,(Block '() (si-tail (cdr label-tail))))) label-tails)])
-       (X86Program info label-blocks))]))
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map si-def def*))]))
 
 (define ((add-edges-instr! g c) instr)
   (match instr
