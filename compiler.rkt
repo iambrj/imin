@@ -983,7 +983,7 @@ r15 -> shadow stack top
      (let* ([g (undirected-graph '())]
             [types (dict-ref info 'locals-types)]
             [_ (map (compose (bi-block g types) cdr) label-block*)])
-       (Def name param* rty info label-block*))]))
+       (Def name param* rty (dict-set info 'conflicts g) label-block*))]))
 
 (define (build-interference d)
   ; XXX : hardcoding for single start block, will have to fix when language has
@@ -1077,6 +1077,7 @@ r15 -> shadow stack top
 (define ((ar-instr var->mem) instr)
   (match instr
     [(Instr i args) (Instr i (map (ar-arg var->mem) args))]
+    [(TailJmp v c) (TailJmp ((ar-arg var->mem) v) c)]
     [_ instr]))
 
 (define ((ar-block var->mem) blk)
@@ -1084,9 +1085,9 @@ r15 -> shadow stack top
     [(Block info instrs)
      (Block info (map (ar-instr var->mem) instrs))]))
 
-(define (allocate-registers p)
-  (match p
-    [(X86Program info label-blocks)
+(define (ar-def d)
+  (match d
+    [(Def name param* rty info label-block*)
      (let* ([g (dict-ref info 'conflicts)]
             [v (filter Var? (get-vertices g))]
             [r (filter Reg? (get-vertices g))]
@@ -1126,15 +1127,20 @@ r15 -> shadow stack top
                       (filter (lambda (r)
                                 (member r callee-saved))
                               (remove-duplicates (dict-values var->mem)))])
-         (X86Program (dict-set* info
-                                'stack-space stack-space
-                                'sstack-space stack-space
-                                'var->mem var->mem
-                                'used-callee used-callee)
-                     (map (lambda (label-block)
-                            (cons (car label-block)
-                                  ((ar-block var->mem) (cdr label-block))))
-                          label-blocks))))]))
+         (Def name param* rty (dict-set* info
+                                         'stack-space stack-space
+                                         'sstack-space stack-space
+                                         'var->mem var->mem
+                                         'used-callee used-callee)
+              (map (lambda (label-block)
+                     (cons (car label-block)
+                           ((ar-block var->mem) (cdr label-block))))
+                   label-block*))))]))
+
+(define (allocate-registers d)
+  (match d
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map ar-def def*))]))
 
 (define (trivial-mov instr)
   (match instr
