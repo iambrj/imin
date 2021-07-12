@@ -977,15 +977,20 @@ r15 -> shadow stack top
        ; block-wise interference graphs
        g)]))
 
-(define (build-interference p)
-  ; XXX : hardcoding for single start block, will have to fix when language has
-  ; more features
-  (match p
-    [(X86Program info label-blocks)
+(define (bi-def d)
+  (match d
+    [(Def name param* rty info label-block*)
      (let* ([g (undirected-graph '())]
             [types (dict-ref info 'locals-types)]
-            [_ (map (compose (bi-block g types) cdr) label-blocks)])
-       (X86Program (dict-set info 'conflicts g) label-blocks))]))
+            [_ (map (compose (bi-block g types) cdr) label-block*)])
+       (Def name param* rty info label-block*))]))
+
+(define (build-interference d)
+  ; XXX : hardcoding for single start block, will have to fix when language has
+  ; more features
+  (match d
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map bi-def def*))]))
 
 (define (min-free-list l)
   (match l
