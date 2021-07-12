@@ -24,7 +24,7 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Rfun-prime ,type-check-Rfun)
     ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
     ("select instructions" ,select-instructions ,interp-pseudo-x86-3)
-    #;("build cfg" ,build-cfg ,interp-pseudo-x86-2)
+    ("build cfg" ,build-cfg ,interp-pseudo-x86-3)
     #;("uncover live" ,uncover-live ,interp-pseudo-x86-2)
     #;("build interference" ,build-interference ,interp-pseudo-x86-2)
     #;("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)

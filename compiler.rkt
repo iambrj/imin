@@ -840,18 +840,20 @@ r15 -> shadow stack top
      (map (add-edges-instr! g (car label-block)) instrs)]
     [else (error "add-edges! unhandled case " label-block)]))
 
+(define (bc-def d)
+  (match d
+    [(Def name param* rty info label-block*)
+     (let* ([labels (dict-keys label-block*)]
+            [g (directed-graph '())]
+            [_ (for ([v labels]) (add-vertex! g v))]
+            [_ (map (add-edges! g) label-block*)])
+       (printf "CFG : ~s\n" (graphviz g))
+       (Def name param* rty (dict-set info 'cfg g) label-block*))]))
+
 (define (build-cfg p)
   (match p
-    [(X86Program info label-blocks)
-     (let* ([labels (dict-keys label-blocks)]
-            [g (directed-graph '())]
-            [_ (foldr (lambda (v acc)
-                        (add-vertex! g v))
-                      g
-                      labels)]
-            [_ (map (add-edges! g) label-blocks)])
-       (printf "CFG : ~s\n" (graphviz g))
-       (X86Program (dict-set info 'cfg g) label-blocks))]))
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map bc-def def*))]))
 
 ; XXX : hardocded to al, will have to change if other registers are used
 (define (byte->reg a)
