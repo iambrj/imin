@@ -408,7 +408,7 @@ r15 -> shadow stack top
        (values tmp (append (apply append (cons fun-env arg-env*))
                            `((,tmp . ,(Apply fun-atm arg-atm*))))))]
     [(FunRef f)
-     (let ([tmp (gensym 'tmp)])
+     (let ([tmp (gensym 'funref)])
        (values tmp `((,tmp . ,(FunRef f)))))]
     [(Prim op es)
      (let* ([tmp (gensym 'tmp)]
@@ -856,18 +856,14 @@ r15 -> shadow stack top
      (ProgramDefs info (map bc-def def*))]))
 
 ; XXX : hardocded to al, will have to change if other registers are used
-(define (byte->reg a)
-  (match a
-    [(Reg 'al) (Reg 'rax)]
-    [_ a]))
 
 (define (instr-w instr)
   (match instr
     [(Instr i `(,_ ,a2)) #:when (member i '(movq addq subq xorq movzbq set leaq))
-     (ul-arg (byte->reg a2))]
+     (ul-arg a2)]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
     [(or (Jmp _) (JmpIf _ _) (Instr 'cmpq _)) (set)]
-    [(or (TailJmp _ _) (Callq _ _)) (list->set caller-saved)]
+    [(or (TailJmp _ _) (IndirectCallq _ _) (Callq _ _)) (list->set caller-saved)]
     [else (error "instr-w missing case : " instr)]))
 
 (define (instr-r instr)
@@ -883,7 +879,8 @@ r15 -> shadow stack top
 
 (define (ul-arg a)
   (match a
-    [(or (Var _) (Reg _)) (set (byte->reg a))]
+    [(Reg 'al) (Reg 'rax)]
+    [(or (Var _) (Reg _)) (set a)]
     [(Deref r _) (set (Reg r))]
     [(or (Global _) (Bool _) (Int _) (Imm _)) (set)]))
 
@@ -927,7 +924,6 @@ r15 -> shadow stack top
             [c (string->symbol (string-append (symbol->string name)
                                               "conclusion"))]
             [label->liveafter (make-hash `((,c . ,(set (Reg 'rax) (Reg 'rsp)))))]
-            [_ (printf "LABEL-LIVEAFTER\n~s\n" label->liveafter)]
             [label-block* (map (lambda (label)
                                  (ul-block label
                                            (dict-ref label-block* label)
@@ -945,24 +941,30 @@ r15 -> shadow stack top
     [`(Vector . ,_) #t]
     [else #f]))
 
+(define deref->reg
+  (lambda (d)
+    (match d
+      [(Deref r _) (Reg r)]
+      [_ d])))
+
 (define (bi-instr instr live-after g types)
   (match instr
     [(Instr 'movq `(,s ,d))
-     (let ([_ (for ([v (set->list live-after)])
-                (unless (or (equal? v d) (equal? v s)) (add-edge! g d v)))])
+     (let* ([d (deref->reg d)]
+            [_ (for ([v (map deref->reg (set->list live-after))])
+                 (unless (or (equal? v d) (equal? v s)) (add-edge! g d v)))])
        g)]
     [(Callq 'collect _)
      (let* ([v-live (filter (lambda (x)
                               (and (symbol? x)
                                    (Vector? (dict-ref types x))))
                             (set->list live-after))]
-            [_ (for* ([v v-live]
-                      [r callee-saved])
+            [_ (for* ([v (map deref->reg v-live)]
+                      [r (map deref->reg callee-saved)])
                  (add-edge! g v r))])
        g)]
-    [else (let* ([w (instr-w instr)]
-                 [_ (for* ([d w]
-                           [v live-after])
+    [else (let* ([_ (for* ([d (map deref->reg (set->list (instr-w instr)))]
+                           [v (map deref->reg (set->list live-after))])
                       (unless (equal? v d) (add-edge! g d v)))])
             g)]))
 
@@ -973,8 +975,6 @@ r15 -> shadow stack top
             [vertices (apply set-union live-after)]
             [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
             [_ (for ([i instrs] [la live-after]) (bi-instr i la g types))])
-       ; Return (Block (dict-set info 'conflicts g) instrs) instead if want
-       ; block-wise interference graphs
        g)]))
 
 (define (bi-def d)
@@ -983,11 +983,10 @@ r15 -> shadow stack top
      (let* ([g (undirected-graph '())]
             [types (dict-ref info 'locals-types)]
             [_ (map (compose (bi-block g types) cdr) label-block*)])
+       (printf "Interference graph: ~s\n" (graphviz g))
        (Def name param* rty (dict-set info 'conflicts g) label-block*))]))
 
 (define (build-interference d)
-  ; XXX : hardcoding for single start block, will have to fix when language has
-  ; more features
   (match d
     [(ProgramDefs info def*)
      (ProgramDefs info (map bi-def def*))]))
