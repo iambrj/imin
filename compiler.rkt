@@ -1149,6 +1149,16 @@ r15 -> shadow stack top
     [(Instr op `(,(Deref 'rbp x) ,(Deref 'rbp y)))
      `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
         ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
+    ; [TODO proof] Invariant: this move into rax will not mess with other uses
+    ; of rax
+    [(TailJmp r l) #:when (not (Reg? r))
+     `(,(Instr 'movq `(,r ,(Reg 'rax)))
+        ,(TailJmp (Reg 'rax) l))]
+    ; [TODO proof] Invariant: this move into rax will not mess with other uses
+    ; of rax
+    [(Instr 'leaq `(,s ,d)) #:when (not (Reg? d))
+     `(,(Instr 'leaq `(,s ,(Reg 'rax)))
+        ,(Instr 'movq `(,(Reg 'rax) ,d)))]
     [_ `(,instr)]))
 
 (define (pi-block blk)
@@ -1166,14 +1176,19 @@ r15 -> shadow stack top
 ; 1. Remove trivial moves e.g. mov rax rax
 ; 2. Remove multi memory accesses in same instruction e.g. transform mov -8rbp,
 ; -16rbp to mov -8rbp, rax + mov rax, -16rbp
-(define (patch-instructions p)
-  (match p
-    [(X86Program info label-blocks)
-     (let ([label-blocks (map (lambda (label-block)
+(define (pi-def d)
+  (match d
+    [(Def name param* rty info label-block*)
+     (let ([label-block* (map (lambda (label-block)
                                 (cons (car label-block)
                                       (pi-block (cdr label-block))))
-                              label-blocks)])
-       (X86Program info label-blocks))]))
+                              label-block*)])
+       (Def name param* rty info label-block*))]))
+
+(define (patch-instructions d)
+  (match d
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map pi-def def*))]))
 
 (define (print-x86-arg arg)
   (match arg
