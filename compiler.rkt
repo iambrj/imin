@@ -855,8 +855,8 @@ r15 -> shadow stack top
     [(ProgramDefs info def*)
      (ProgramDefs info (map bc-def def*))]))
 
-; XXX : hardocded to al, will have to change if other registers are used
 
+; XXX : hardocded to al, will have to change if other registers are used
 (define (instr-w instr)
   (match instr
     [(Instr i `(,_ ,a2)) #:when (member i '(movq addq subq xorq movzbq set leaq))
@@ -873,7 +873,8 @@ r15 -> shadow stack top
     [(Instr i `(,a1 ,_)) #:when (member i '(movq subq movzbq))
      (ul-arg a1)]
     [(Instr 'negq `(,arg)) (ul-arg arg)]
-    [(or (TailJmp _ i) (IndirectCallq _ i) (Callq _ i)) (list->set (take callee-saved i))]
+    [(or (TailJmp a i) (IndirectCallq a i)) (set-union (ul-arg a) (list->set (take callee-saved i)))]
+    [(Callq _ i) (list->set (take callee-saved i))]
     [(or (Instr 'leaq _) (Instr 'set _)) (set)]
     [else (error "instr-r missing case : " instr)]))
 
@@ -882,7 +883,7 @@ r15 -> shadow stack top
     [(Reg 'al) (Reg 'rax)]
     [(or (Var _) (Reg _)) (set a)]
     [(Deref r _) (set (Reg r))]
-    [(or (Global _) (Bool _) (Int _) (Imm _)) (set)]))
+    [(or (Global _) (Bool _) (Int _) (Imm _) (FunRef _)) (set)]))
 
 ; Lafter(n) = {}
 ; Lafter(k) =  Lbefore(k - 1)
@@ -941,11 +942,10 @@ r15 -> shadow stack top
     [`(Vector . ,_) #t]
     [else #f]))
 
-(define deref->reg
-  (lambda (d)
+(define (deref->reg d)
     (match d
       [(Deref r _) (Reg r)]
-      [_ d])))
+      [_ d]))
 
 (define (bi-instr instr live-after g types)
   (match instr
@@ -1046,24 +1046,22 @@ r15 -> shadow stack top
                                          maxcolor)))
                                (dict-keys var->color))]
          [var->stk (foldr (lambda (v i a)
-                                  (dict-set a v i)
-                                  a)
-                              '()
-                              spilled-vars
-                              (range 1 (add1 (length spilled-vars))))]
+                            `((,v . ,i) . ,a))
+                          '()
+                          spilled-vars
+                          (range 1 (add1 (length spilled-vars))))]
          [vec->stk (foldr (lambda (v i a)
-                                  (dict-set a v i)
-                                  a)
-                              '()
-                              spilled-vecs
-                              (range 1 (add1 (length spilled-vecs))))])
+                            `((,v . ,i) . ,a))
+                          '()
+                          spilled-vecs
+                          (range 1 (add1 (length spilled-vecs))))])
     (values (dict-map var->color (lambda (v c)
                                    `(,v . ,(if (Vector? v)
                                              (if (member v spilled-vecs)
-                                               (dict-ref vec->stk v)
+                                               (Deref 'r11 (* 8 (dict-ref vec->stk v)))
                                                (dict-ref color->reg c))
                                              (if (member v spilled-vars)
-                                               (dict-ref var->stk v)
+                                               (Deref 'rbp (* 8 (dict-ref var->stk v)))
                                                (dict-ref color->reg c))))))
             (length (dict-values var->stk))
             (length (dict-values vec->stk)))))
@@ -1117,7 +1115,7 @@ r15 -> shadow stack top
             [vertex->color
               (color-graph g q v vertex->sat vertex->node
                            vertex->color)])
-       (let*-values ([(var->mem stack-space sstack-space)
+       (let*-values ([(var->mem stack-space shadow-stack-space)
                       (var->mem vertex->color
                                 (map (lambda (r)
                                        (cons (index-of usable-registers r) r))
@@ -1128,7 +1126,7 @@ r15 -> shadow stack top
                               (remove-duplicates (dict-values var->mem)))])
          (Def name param* rty (dict-set* info
                                          'stack-space stack-space
-                                         'sstack-space stack-space
+                                         'shadow-stack-space shadow-stack-space
                                          'var->mem var->mem
                                          'used-callee used-callee)
               (map (lambda (label-block)
@@ -1149,7 +1147,6 @@ r15 -> shadow stack top
 (define (pi-instr instr)
   (match instr
     [(Instr op `(,(Deref 'rbp x) ,(Deref 'rbp y)))
-     ; What if rax is live at this point!?
      `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
         ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
     [_ `(,instr)]))
