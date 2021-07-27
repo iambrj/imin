@@ -524,7 +524,7 @@ r15 -> shadow stack top
   (match c
     [(Return v)   (Return (HasType v t))]
     [(Seq a tail) (Seq a (annotate-cont tail t))]
-    [else         (error "Couldn't annotate ~s with ~s" c t)]))
+    [else         (error "Couldn't annotate ~a with ~a" c t)]))
 
 (define (block->goto b label->block)
   (delay
@@ -850,7 +850,7 @@ r15 -> shadow stack top
             [g (directed-graph '())]
             [_ (for ([v labels]) (add-vertex! g v))]
             [_ (map (add-edges! g) label-block*)])
-       (printf "CFG : ~s\n" (graphviz g))
+       (printf "CFG : ~a\n" (graphviz g))
        (Def name param* rty (dict-set info 'cfg g) label-block*))]))
 
 (define (build-cfg p)
@@ -986,7 +986,7 @@ r15 -> shadow stack top
      (let* ([g (undirected-graph '())]
             [types (dict-ref info 'locals-types)]
             [_ (map (compose (bi-block g types) cdr) label-block*)])
-       (printf "Interference graph: ~s\n" (graphviz g))
+       (printf "Interference graph: ~a\n" (graphviz g))
        (Def name param* rty (dict-set info 'conflicts g) label-block*))]))
 
 (define (build-interference d)
@@ -1205,50 +1205,41 @@ r15 -> shadow stack top
 
 (define (print-x86-arg arg)
   (match arg
-    [(Global x) (string-append (symbol->string x) "(%rip)")]
-    [(Imm i) (string-append "$" (number->string i))]
-    [(Reg r) (string-append "%" (symbol->string r))]
-    [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
-    [(FunRef l)
-     (string-append (symbol->string l) "(%rip)")]
-    [else (error "print-x86-arg unhandled case " arg)]))
+    [(Global x) (format "~a(%rip)" x)]
+    [(Imm i) (format "$~a" i)]
+    [(Reg r) (format "%~a" r)]
+    [(Deref r i) (format "~a(%~a)" i r)]
+    [(FunRef l) (format "~a(%rip)" l)]))
 
 (define (print-x86-args args)
   (match args
     [`(,a) (print-x86-arg a)]
-    [`(,a1 ,a2)
-      (string-append (print-x86-arg a1) ", " (print-x86-arg a2))]))
+    [`(,a1 ,a2) (format "~a, ~a" (print-x86-arg a1) (print-x86-arg a2))]))
 
-(define ((print-x86-instr stack-space shadow-stack-space used-callee) instr)
+(define (print-x86-instr stack-space shadow-stack-space used-callee instr)
   (match instr
-    [(Callq l i) (string-append "callq "
-                                (symbol->string l))]
+    [(Callq l i) (format "callq ~a" l)]
     [(Retq) "retq"]
-    [(Jmp l) (string-append "jmp " (symbol->string l))]
-    [(JmpIf cc l) (string-append "j"
-                                 (symbol->string cc)
-                                 " "
-                                 (symbol->string l))]
-    [(Instr 'set `(,cc ,r))
-     (string-append "set"
-                    (symbol->string cc)
-                    " "
-                    (print-x86-arg r))]
+    [(Jmp l) (format "jmp ~a" l)]
+    [(JmpIf cc l) (format "j~a ~a" cc l)]
+    [(Instr 'set `(,cc ,r)) (format "set~a ~a" cc r)]
     [(Instr op args)
-     (string-append (symbol->string op) " "
+     (string-append (format "~a " op)
                     (print-x86-args args))]
-    [(IndirectCallq arg len)
-     (string-append "callq *" (print-x86-arg arg))]
-    [(TailJmp arg len)
-     (string-append (print-clear-stack stack-space shadow-stack-space used-callee)
-                    "jmp *"
-                    (print-x86-arg arg))]))
+    [(IndirectCallq arg len) (format "callq *~a" (print-x86-arg arg))]
+    [(TailJmp arg len) 
+     (string-append (print-restore stack-space shadow-stack-space used-callee)
+                    (format "jmp *~a" (print-x86-arg arg)))]))
 
-(define (print-x86-block blk)
+(define (print-x86-block blk stack-space shadow-stack-space used-callee)
   (match blk
     [(Block info instrs)
      (foldr (lambda (instr acc)
-              (string-append "\t" (print-x86-instr instr) "\n" acc))
+              (string-append acc
+                             (format "\t~a\n" (print-x86-instr stack-space
+                                                               shadow-stack-space
+                                                               used-callee
+                                                               instr))))
             ""
             instrs)]
     [_ (error "print-x86-block unhandled case " blk)]))
@@ -1259,26 +1250,31 @@ r15 -> shadow stack top
                  (format "~a:\n" name)
                  "\tpushq %rbp\n"
                  "\tmovq %rsp, %rbp\n"
-                 (apply string-append
-                        (map (lambda (r)
-                               (string-append "\tpushq %"
-                                              (symbol->string (Reg-name r))
-                                              "\n"))
-                             used-callee))
-                 "\tsubq $" (number->string (if (zero? (modulo (+ stack-space
-                                                                  (* 8 (length used-callee)))
-                                                               16))
-                                              stack-space
-                                              (+ 8 stack-space))) ", %rsp\n"
-                 "\tmovq $16384, %rdi\n"
-                 "\tmovq $16384, %rsi\n"
-                 "\tcallq initialize\n"
-                 "\tmovq rootstack_begin(%rip), %r15\n"
+                 (foldr (lambda (r a)
+                          (format "\tpushq %~a\n" (Reg-name r)))
+                        ""
+                        used-callee)
+                 (format "\tsubq $~a, %rsp\n" (print-alignment stack-space
+                                                               used-callee))
+                 (if (eqv? name 'main)
+                   (string-append
+                     "\tmovq $16384, %rdi\n"
+                     "\tmovq $16384, %rsi\n"
+                     "\tcallq initialize\n"
+                     "\tmovq rootstack_begin(%rip), %r15\n")
+                   "")
                  "\tmovq $0, %r15\n"
-                 "\taddq $" (number->string shadow-stack-space) ", %r15\n"
-                 "\tjmp start\n"))
+                 (format "\taddq $~a, %r15\n" (number->string shadow-stack-space))
+                 (format "\tjmp ~astart\n" (symbol->string name))))
 
-(define (print-clear-stack stack-space shadow-stack-space used-callee)
+(define (print-alignment stack-space used-callee)
+  (if (zero? (modulo (+ stack-space
+                        (* 8 (length used-callee)))
+                     16))
+    stack-space
+    (+ 8 stack-space)))
+
+(define (print-restore stack-space shadow-stack-space used-callee)
   (string-append "\tsubq $" (number->string shadow-stack-space) ", %r15\n"
                  "\taddq $" (number->string (if (zero? (modulo (+ stack-space
                                                                   (* 8 (length used-callee)))
@@ -1293,9 +1289,9 @@ r15 -> shadow stack top
                              used-callee))
                  "\tpopq %rbp\n"))
 
-(define (print-conclusion-block stack-space shadow-stack-space used-callee)
-  (string-append "conclusion:\n"
-                 (print-clear-stack stack-space shadow-stack-space used-callee)
+(define (print-conclusion-block name stack-space shadow-stack-space used-callee)
+  (string-append (format "~aconclusion:\n" (symbol->string name))
+                 (print-restore stack-space shadow-stack-space used-callee)
                  "\tretq\n"))
 
 ;; print-x86 : x86 -> string
@@ -1306,10 +1302,13 @@ r15 -> shadow stack top
             [shadow-stack-space (dict-ref info 'shadow-stack-space)]
             [used-callee (dict-ref info 'used-callee)]
             [prelude (print-x86-prelude name stack-space shadow-stack-space used-callee)]
-            [conclusion (print-conclusion-block stack-space shadow-stack-space used-callee)]
+            [conclusion (print-conclusion-block name stack-space shadow-stack-space used-callee)]
             [label-block* (foldl (lambda (label-block acc)
                                    (string-append (symbol->string (car label-block)) ":\n"
-                                                  (print-x86-block (cdr label-block))
+                                                  (print-x86-block (cdr label-block)
+                                                                   stack-space
+                                                                   shadow-stack-space
+                                                                   used-callee)
                                                   acc))
                                  ""
                                  label-block*)])
@@ -1318,4 +1317,8 @@ r15 -> shadow stack top
 (define (print-x86 p)
   (match p
     [(ProgramDefs info def*)
-     (ProgramDefs info (map print-x86-def def*))]))
+     (foldr (lambda (def a)
+              (string-append a
+                             (print-x86-def def)))
+            ""
+            def*)]))
