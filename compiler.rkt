@@ -32,6 +32,9 @@ r15 -> shadow stack top
   (let ([r '(rbx rcx rdx rsi rdi r8 r9 r10 r12 r13 r14)])
     (map Reg r)))
 
+(define shadow-stk-reg 'r15)
+(define stk-reg 'rbp)
+
 ;; Partial evaluation pass described in the book.
 (define (pe-neg r)
   (match r
@@ -1032,39 +1035,40 @@ r15 -> shadow stack top
                                                             vertex->color v
                                                             color)))]))
 
-; returns var->mem, stack size, shadow stack size
-(define (var->mem var->color color->reg)
-  (let* ([maxcolor (apply max (dict-keys color->reg))]
-         [spilled-vars (filter (lambda (v)
-                                 (and (Var? v)
-                                      (> (dict-ref var->color v)
-                                         maxcolor)))
-                               (dict-keys var->color))]
-         [spilled-vecs (filter (lambda (v)
-                                 (and (Vector? v)
-                                      (> (dict-ref var->color v)
-                                         maxcolor)))
-                               (dict-keys var->color))]
-         [var->stk (foldr (lambda (v i a)
-                            `((,v . ,i) . ,a))
-                          '()
-                          spilled-vars
-                          (range 1 (add1 (length spilled-vars))))]
-         [vec->stk (foldr (lambda (v i a)
-                            `((,v . ,i) . ,a))
-                          '()
-                          spilled-vecs
-                          (range 1 (add1 (length spilled-vecs))))])
+(define (var->mem var->color)
+  (let* ([color->reg (map (lambda (r)
+                            (cons (index-of usable-registers r) r))
+                          usable-registers)]
+         [maxcolor (apply max (dict-keys color->reg))]
+         [spills (spill maxcolor var->color)]
+         [spilled->stk (get-stk-locations spills)])
     (values (dict-map var->color (lambda (v c)
-                                   `(,v . ,(if (Vector? v)
-                                             (if (member v spilled-vecs)
-                                               (Deref 'r11 (* 8 (dict-ref vec->stk v)))
-                                               (dict-ref color->reg c))
-                                             (if (member v spilled-vars)
-                                               (Deref 'rbp (* 8 (dict-ref var->stk v)))
-                                               (dict-ref color->reg c))))))
-            (length (dict-values var->stk))
-            (length (dict-values vec->stk)))))
+                                   `(,v . ,(if (member v spills)
+                                             (dict-ref spilled->stk v)
+                                             (dict-ref color->reg c)))))
+            (stack-size Var? spills)
+            (stack-size Vector? spills))))
+
+(define (spill maxcolor var->color)
+  (filter (lambda (v)
+            (> (dict-ref var->color v) maxcolor))
+          (dict-keys var->color)))
+
+(define (get-stk-locations spills)
+  (let ([vec-spills (filter Vector? spills)]
+        [nonvec-spills (filter Var? spills)])
+    (foldr (lambda (v i a)
+           (let ([stk (if (Var? v) stk-reg shadow-stk-reg)]
+                 [offset (if (Var? v)
+                           (index-of nonvec-spills v)
+                           (index-of vec-spills v))])
+            `((,v . ,(Deref stk (* 8 offset))) . ,a)))
+         '()
+         spills
+         (range 1 (add1 (length spills))))))
+
+(define (stack-size pred spills)
+  (length (filter pred spills)))
 
 (define ((ar-arg var->mem) arg)
   (match arg
@@ -1116,10 +1120,7 @@ r15 -> shadow stack top
               (color-graph g q v vertex->sat vertex->node
                            vertex->color)])
        (let*-values ([(var->mem stack-space shadow-stack-space)
-                      (var->mem vertex->color
-                                (map (lambda (r)
-                                       (cons (index-of usable-registers r) r))
-                                     usable-registers))]
+                      (var->mem vertex->color)]
                      [(used-callee)
                       (filter (lambda (r)
                                 (member r callee-saved))
@@ -1196,6 +1197,8 @@ r15 -> shadow stack top
     [(Imm i) (string-append "$" (number->string i))]
     [(Reg r) (string-append "%" (symbol->string r))]
     [(Deref r i) (string-append (number->string i) "(%" (symbol->string r) ")")]
+    [(FunRef l)
+     (string-append (symbol->string l) "(%rip)")]
     [else (error "print-x86-arg unhandled case " arg)]))
 
 (define (print-x86-args args)
@@ -1204,7 +1207,7 @@ r15 -> shadow stack top
     [`(,a1 ,a2)
       (string-append (print-x86-arg a1) ", " (print-x86-arg a2))]))
 
-(define (print-x86-instr instr)
+(define ((print-x86-instr stack-space shadow-stack-space used-callee) instr)
   (match instr
     [(Callq l i) (string-append "callq "
                                 (symbol->string l))]
@@ -1221,7 +1224,13 @@ r15 -> shadow stack top
                     (print-x86-arg r))]
     [(Instr op args)
      (string-append (symbol->string op) " "
-                    (print-x86-args args))]))
+                    (print-x86-args args))]
+    [(IndirectCallq arg len)
+     (string-append "callq *" (print-x86-arg arg))]
+    [(TailJmp arg len)
+     (string-append (print-clear-stack stack-space shadow-stack-space used-callee)
+                    "jmp *"
+                    (print-x86-arg arg))]))
 
 (define (print-x86-block blk)
   (match blk
@@ -1232,16 +1241,18 @@ r15 -> shadow stack top
             instrs)]
     [_ (error "print-x86-block unhandled case " blk)]))
 
-(define (print-main-block stack-space sstack-space used-callee)
-  (string-append "main:\n"
+(define (print-x86-prelude name stack-space shadow-stack-space used-callee)
+  (string-append (format "\t.globl ~a\n" name)
+                 "\t.align 16\n"
+                 (format "~a:\n" name)
                  "\tpushq %rbp\n"
+                 "\tmovq %rsp, %rbp\n"
                  (apply string-append
                         (map (lambda (r)
                                (string-append "\tpushq %"
                                               (symbol->string (Reg-name r))
                                               "\n"))
                              used-callee))
-                 "\tmovq %rsp, %rbp\n"
                  "\tsubq $" (number->string (if (zero? (modulo (+ stack-space
                                                                   (* 8 (length used-callee)))
                                                                16))
@@ -1252,12 +1263,11 @@ r15 -> shadow stack top
                  "\tcallq initialize\n"
                  "\tmovq rootstack_begin(%rip), %r15\n"
                  "\tmovq $0, %r15\n"
-                 "\taddq $" (number->string sstack-space) ", %r15\n"
+                 "\taddq $" (number->string shadow-stack-space) ", %r15\n"
                  "\tjmp start\n"))
 
-(define (print-conclusion-block stack-space sstack-space used-callee)
-  (string-append "conclusion:\n"
-                 "\tsubq $" (number->string sstack-space) ", %r15\n"
+(define (print-clear-stack stack-space shadow-stack-space used-callee)
+  (string-append "\tsubq $" (number->string shadow-stack-space) ", %r15\n"
                  "\taddq $" (number->string (if (zero? (modulo (+ stack-space
                                                                   (* 8 (length used-callee)))
                                                                16))
@@ -1269,25 +1279,31 @@ r15 -> shadow stack top
                                               (symbol->string (Reg-name r))
                                               "\n"))
                              used-callee))
-                 "\tpopq %rbp\n"
+                 "\tpopq %rbp\n"))
+
+(define (print-conclusion-block stack-space shadow-stack-space used-callee)
+  (string-append "conclusion:\n"
+                 (print-clear-stack stack-space shadow-stack-space used-callee)
                  "\tretq\n"))
 
 ;; print-x86 : x86 -> string
-(define (print-x86 p)
+(define (print-x86-def p)
   (match p
-    [(X86Program info label-blocks)
+    [(Def name param* rty info label-block*)
      (let* ([stack-space (dict-ref info 'stack-space)]
-            [sstack-space (dict-ref info 'sstack-space)]
+            [shadow-stack-space (dict-ref info 'shadow-stack-space)]
             [used-callee (dict-ref info 'used-callee)]
-            [main (print-main-block stack-space sstack-space used-callee)]
-            [conclusion (print-conclusion-block stack-space sstack-space used-callee)]
-            [label-blocks (foldl (lambda (label-block acc)
+            [prelude (print-x86-prelude name stack-space shadow-stack-space used-callee)]
+            [conclusion (print-conclusion-block stack-space shadow-stack-space used-callee)]
+            [label-block* (foldl (lambda (label-block acc)
                                    (string-append (symbol->string (car label-block)) ":\n"
                                                   (print-x86-block (cdr label-block))
-                                                  (if (equal? (car label-block) 'start)
-                                                    "\t.globl main\n"
-                                                    "")
                                                   acc))
                                  ""
-                                 label-blocks)])
-       (string-append label-blocks main conclusion))]))
+                                 label-block*)])
+       (string-append label-block* prelude conclusion))]))
+
+(define (print-x86 p)
+  (match p
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map print-x86-def def*))]))
