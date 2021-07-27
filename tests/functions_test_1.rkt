@@ -1,2 +1,3 @@
- (define (id [x : Integer]) : Integer x)
+ (define (id [x : Integer]) : Integer
+   x)
  (id 42)

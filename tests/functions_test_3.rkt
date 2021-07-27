@@ -1,3 +1,4 @@
-(define (car [x : (Vector Integer (Vector Integer))]) : Integer 
+(define (car [x : (Vector Integer)]) : Integer 
   (vector-ref x 0))                                             
-(car (vector 1 (vector 2)))                                     
+
+(car (vector 1))                                     
