@@ -127,7 +127,8 @@ which will produce the executable program named a.out.
     For instance, if `rsp` (which always gets `pushq`ed in all functions) and
     `rbx` (say function uses it locally) get `pushq`ed, then the stack is
     currently aligned to 8 + 8 = 16 bytes, which isn't 8+16*n. So
-    `subq $8, %rsp` must be generated to realign to 8+16*n.
+    `subq $24, %rsp` must be generated to realign to 8+16*n (16 for the two
+    `pushq`s, plus 8 for the alignment = 24).
 - Stuff that lazy explicate control achieves
     1. Avoids duplicate block generation
     2. Avoids dead block generation
