@@ -804,24 +804,32 @@ r15 -> shadow stack top
 
 (define (si-def d)
   (match d
-    [(Def name param* rty info label-tails)
+    [(Def name param* rty info label-tail*)
      (let* ([param* (map param-name param*)]
-            [arg-movs (map (lambda (idx)
-                             (Instr 'movq `(,(list-ref param-reg* idx)
-                                             ,(Var (list-ref param* idx)))))
-                           (range 0 (length param*)))]
-            [s (string->symbol (string-append (symbol->string name)
-                                              "start"))]
-            [c (string->symbol (string-append (symbol->string name)
-                                              "conclusion"))]
-            [start-block `(,s . ,(Block '() (append arg-movs (si-tail (dict-ref label-tails s) c))))]
-            [rest-blocks (map (lambda (label-tail)
-                                (let ([label (car label-tail)]
-                                      [tail (cdr label-tail)])
-                                  `(,label . ,(Block '() (si-tail tail c)))))
-                              (dict-remove label-tails s))]
-            [label-blocks `(,start-block . ,rest-blocks)])
-       (Def name param* 'Integer (cons `(num-params . ,(length param*)) info) label-blocks))]))
+            [arg-mov* (for/list ([idx (in-range (length param*))])
+                        (Instr 'movq `(,(list-ref param-reg* idx)
+                                        ,(Var (list-ref param* idx)))))]
+            [start-label (gen-start-label name)]
+            [concl-label (gen-concl-label name)]
+            [start `(,start-label
+                      . ,(Block '() (append arg-mov*
+                                            (si-tail (dict-ref label-tail*
+                                                               start-label)
+                                                     concl-label))))]
+            [rest (for/list ([label-tail label-tail*])
+                    (let ([label (car label-tail)]
+                          [tail (cdr label-tail)])
+                      `(,label . ,(Block '() (si-tail tail concl-label)))))])
+       (Def name param* 'Integer `((num-params . ,(length param*)) . ,info)
+            `(,start . ,rest)))]))
+
+(define (gen-start-label name)
+  (string->symbol (string-append (symbol->string name)
+                                 "start")))
+
+(define (gen-concl-label name)
+  (string->symbol (string-append (symbol->string name)
+                                 "conclusion")))
 
 ; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
@@ -1251,7 +1259,7 @@ r15 -> shadow stack top
     [(IndirectCallq arg len) (format "callq *~a" (print-x86-arg arg))]
     [(TailJmp arg len) 
      (string-append (print-restore stack-space shadow-stack-space used-callee)
-                    (format "jmp *~a" (print-x86-arg arg)))]))
+                    (format "\tjmp *~a" (print-x86-arg arg)))]))
 
 (define (print-x86-args args)
   (match args
