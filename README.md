@@ -63,6 +63,7 @@ racket run-tests.rkt
   (gdb) break *main+2
   Breakpoint 1 at 0x1124: file var_test_11.s, line 8.
 ```
+Use `del <number>` to delete breakpoint (number comes from `info break`).
 4. Use `run` to step through the program, stopping at each break point and
    `cont` to continue till the next breakpoint. Use `info registers` to inspect
    register contents, `print/<bxd> <reg>` to print contents of register `<reg>`
@@ -119,6 +120,12 @@ which will produce the executable program named a.out.
     code -- in this case, this duplication can introduce issues if either of
     them are a `(read)` call, since the compiled program may potentially have to
     read the file twice instead of once!
+- Before a tail call, the callee-saved registers must be popped-off from the
+    stack. However, observe that if a callee-saved register is being used as the
+    argument to `TailJmp`, we have an absurdity! The function address first gets
+    `leaq`ed into a callee-saved register, but then all callee-saved registers
+    get `pop`ed, so this `leaq` is overwritten and `jmp`'s target is not what we
+    want it to be.
 
 ## Notes
 
@@ -127,8 +134,8 @@ which will produce the executable program named a.out.
     For instance, if `rsp` (which always gets `pushq`ed in all functions) and
     `rbx` (say function uses it locally) get `pushq`ed, then the stack is
     currently aligned to 8 + 8 = 16 bytes, which isn't 8+16*n. So
-    `subq $24, %rsp` must be generated to realign to 8+16*n (16 for the two
-    `pushq`s, plus 8 for the alignment = 24).
+    `subq $8, %rsp` must be generated to realign to 8+16*n. If only `rbp` were
+    being pushed, then this extra `subq` would not have been necessary.
 - Stuff that lazy explicate control achieves
     1. Avoids duplicate block generation
     2. Avoids dead block generation
