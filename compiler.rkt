@@ -1179,9 +1179,9 @@ r15 -> shadow stack top
 
 (define (pi-instr instr)
   (match instr
-    [(Instr op `(,(Deref 'rbp x) ,(Deref 'rbp y)))
-     `(,(Instr 'movq `(,(Deref 'rbp x) ,(Reg 'rax)))
-        ,(Instr op `(,(Reg 'rax) ,(Deref 'rbp y))))]
+    [(Instr op `(,(Deref s x) ,(Deref d y)))
+     `(,(Instr 'movq `(,(Deref s x) ,(Reg 'rax)))
+        ,(Instr op `(,(Reg 'rax) ,(Deref d y))))]
     ; [TODO proof] Invariant: this move into rax will not mess with other uses
     ; of rax
     [(TailJmp r l) #:when (not (Reg? r))
