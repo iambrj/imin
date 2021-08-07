@@ -965,6 +965,15 @@ r15 -> shadow stack top
             [_ (for ([v (map deref->reg (set->list live-after))])
                  (unless (or (equal? v d) (equal? v s)) (add-edge! g d v)))])
        g)]
+    ; Don't want TailJmp's argument to be a callee-saved register, since we pop
+    ; off callee saved registers before tail jumping!
+    [(Instr 'leaq `(,_ ,d))
+     (let* ([_ (for* ([d (map deref->reg (set->list (instr-w instr)))]
+                      [v (map deref->reg (set->list live-after))])
+                 (unless (equal? v d) (add-edge! g d v)))]
+            [_ (for* ([r callee-saved])
+                 (add-edge! g d r))])
+       g)]
     [(Callq 'collect _)
      (let* ([v-live (filter (lambda (x)
                               (and (symbol? x)
@@ -1016,15 +1025,18 @@ r15 -> shadow stack top
                     (var->mem vertex->color)]
                    [(label-block*) (substitute var->mem label-block*)]
                    [(used-callee)
-                    (filter (lambda (r)
-                              (member r callee-saved))
-                            (remove-duplicates (dict-values var->mem)))])
+                    (filter-used-callee var->mem)])
        (Def name param* rty (dict-set* info
                                        'stack-space stack-space
                                        'shadow-stack-space shadow-stack-space
                                        'var->mem var->mem
                                        'used-callee used-callee)
             label-block*))]))
+
+(define (filter-used-callee var->mem)
+  (let* ([vars (filter Var? (dict-keys var->mem))]
+         [mems (for/list ([var vars]) (dict-ref var->mem var))])
+    (filter (lambda (x) (member x callee-saved)) mems)))
 
 (define (color-graph ig)
   (let* ([vars (filter Var? (get-vertices ig))]
@@ -1120,7 +1132,7 @@ r15 -> shadow stack top
          (range 1 (add1 (length spills))))))
 
 (define (stack-size pred spills)
-  (length (filter pred spills)))
+  (* 8 (length (filter pred spills))))
 
 ; NOTE : Can be optimized to O(n) using some obscure mutation tricks
 (define (min-free s)
@@ -1238,12 +1250,12 @@ r15 -> shadow stack top
 (define (print-x86-block blk stack-space shadow-stack-space used-callee)
   (match blk
     [(Block info instr*)
-     (let ([l (for/list ([instr instr*])
-                (format "\t~a\n" (print-x86-instr stack-space
-                                                  shadow-stack-space
-                                                  used-callee
-                                                  instr)))])
-       (apply string-append l))]
+     (let ([instr* (for/list ([instr instr*])
+                     (format "\t~a\n" (print-x86-instr stack-space
+                                                       shadow-stack-space
+                                                       used-callee
+                                                       instr)))])
+       (apply string-append instr*))]
     [_ (error "print-x86-block unhandled case " blk)]))
 
 (define (print-x86-instr stack-space shadow-stack-space used-callee instr)
@@ -1287,12 +1299,19 @@ r15 -> shadow stack top
                  (print-gc-setup shadow-stack-space)
                  (format "\tjmp ~astart\n" name)))
 
+(define (print-alignment op stack-space used-callee)
+  (let* ([memory (+ stack-space
+                    (* 8 (length used-callee))
+                    8)] ; rbp
+         [arg (if (odd? (modulo memory 8))
+                stack-space
+                (+ 8 stack-space))])
+    (if (> arg 0)
+      (format "\t~a $~a, %rsp\n" op arg)
+      "")))
+
 (define (print-alignment-setup stack-space used-callee)
-  (format "\tsubq $~a, %rsp\n" (if (zero? (modulo (+ stack-space
-                                                     (* 8 (length used-callee)))
-                                                  16))
-                                 stack-space
-                                 (+ 8 stack-space))))
+  (print-alignment "subq" stack-space used-callee))
 
 (define (print-directives name)
   (string-append (format "\t.globl ~a\n" name)
@@ -1333,11 +1352,7 @@ r15 -> shadow stack top
     ""))
 
 (define (print-alignment-restore stack-space used-callee)
-  (format "\taddq $~a, %rsp\n" (if (zero? (modulo (+ stack-space
-                                                     (* 8 (length used-callee)))
-                                                  16))
-                                 stack-space
-                                 (+ 8 stack-space))))
+  (print-alignment "addq" stack-space used-callee))
 
 (define (print-pops used-callee)
   (let ([l (for/list ([r used-callee])
