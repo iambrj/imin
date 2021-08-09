@@ -27,9 +27,9 @@
     ("build cfg" ,build-cfg ,interp-pseudo-x86-3)
     ("uncover live" ,uncover-live ,interp-pseudo-x86-3)
     ("build interference" ,build-interference ,interp-pseudo-x86-3)
-    #;("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
-    #;("patch instructions" ,patch-instructions ,interp-pseudo-x86-3)
-    #;("print x86" ,print-x86 #f)))
+    ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
+    ("patch instructions" ,patch-instructions ,interp-pseudo-x86-3)
+    ("print x86" ,print-x86 #f)))
 
 #;(define passes
   `(("shrink" ,shrink ,interp-Rvec ,type-check-Rvec)
@@ -67,3 +67,4 @@
 ;; test the final x86 code.
 ;(compiler-tests "cond" type-check-Rif passes "cond_test" (tests-for "cond"))
 ;(compiler-tests "vectors" type-check-Rvec passes "vectors_test" (tests-for "vectors"))
+(compiler-tests "functions" type-check-Rfun passes "functions_test" (tests-for "functions"))

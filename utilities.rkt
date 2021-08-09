@@ -71,7 +71,7 @@ Added structs for AST nodes.
          arg-registers rootstack-reg register->color color->register
          registers align byte-reg->full-reg print-by-type strip-has-type
          make-lets dict-set-all dict-remove-all goto-label get-CFG 
-         symbol-append any-tag parse-program vector->set atm? fst
+         symbol-append any-tag parse-program vector->set atm? fst parse-exp
 
          (contract-out [struct Prim ((op symbol?) (arg* exp-list?))])
          (contract-out [struct Var ((name symbol?))])
@@ -144,7 +144,7 @@ Added structs for AST nodes.
          (contract-out [struct ByteReg ((name symbol?))])
 
          (struct-out Tagged)
-         )
+         Vector?)
 
 ;; debug state is a nonnegative integer.
 ;; The easiest way to increment it is passing the -d option
@@ -1645,6 +1645,8 @@ Added structs for AST nodes.
     [(Void) '(void)]
     [(Let x rhs body)
      `(let ([,x ,(unparse-exp rhs)]) ,(unparse-exp body))]
+    [(If c t e)
+     `(if ,(unparse-exp c) ,(unparse-exp t) ,(unparse-exp e))]
     [(Lambda ps rt body)
      `(lambda: ,ps ,rt ,(unparse-exp body))]
     [(Prim op es)
@@ -2381,3 +2383,8 @@ Added structs for AST nodes.
 
 (define passes
   `(("uniquify" uniquify interp-Rvar type-check-Rvar)))
+
+(define (Vector? v)
+  (match v
+    [`(Vector . ,_) #t]
+    [else #f]))
