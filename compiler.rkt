@@ -957,6 +957,28 @@ r15 -> shadow stack top
     (match d
       [(Deref r _) (Reg r)]
       [_ d]))
+(define (build-interference d)
+  (match d
+    [(ProgramDefs info def*)
+     (ProgramDefs info (map bi-def def*))]))
+
+(define (bi-def d)
+  (match d
+    [(Def name param* rty info label-block*)
+     (let* ([g (undirected-graph '())]
+            [types (dict-ref info 'locals-types)]
+            [_ (map (compose (bi-block g types) cdr) label-block*)])
+       (printf "Interference graph: ~a\n" (graphviz g))
+       (Def name param* rty (dict-set info 'conflicts g) label-block*))]))
+
+(define ((bi-block g types) blk)
+  (match blk
+    [(Block info instrs)
+     (let* ([live-after (dict-ref info 'live-after)]
+            [vertices (apply set-union live-after)]
+            [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
+            [_ (for ([i instrs] [la live-after]) (bi-instr i la g types))])
+       g)]))
 
 (define (bi-instr instr live-after g types)
   (match instr
@@ -987,29 +1009,6 @@ r15 -> shadow stack top
                            [v (map deref->reg (set->list live-after))])
                       (unless (equal? v d) (add-edge! g d v)))])
             g)]))
-
-(define ((bi-block g types) blk)
-  (match blk
-    [(Block info instrs)
-     (let* ([live-after (dict-ref info 'live-after)]
-            [vertices (apply set-union live-after)]
-            [_ (for ([v (set->list vertices)]) (add-vertex! g v))]
-            [_ (for ([i instrs] [la live-after]) (bi-instr i la g types))])
-       g)]))
-
-(define (bi-def d)
-  (match d
-    [(Def name param* rty info label-block*)
-     (let* ([g (undirected-graph '())]
-            [types (dict-ref info 'locals-types)]
-            [_ (map (compose (bi-block g types) cdr) label-block*)])
-       (printf "Interference graph: ~a\n" (graphviz g))
-       (Def name param* rty (dict-set info 'conflicts g) label-block*))]))
-
-(define (build-interference d)
-  (match d
-    [(ProgramDefs info def*)
-     (ProgramDefs info (map bi-def def*))]))
 
 (define (allocate-registers d)
   (match d
