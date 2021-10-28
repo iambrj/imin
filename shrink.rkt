@@ -60,4 +60,6 @@
     ; (> e1 e2) == (not (<= e1 e2))
     [(Prim '> `(,e1 ,e2))
      (let ([e (Prim 'not `(,(Prim '<= `(,e1 ,e2))))])
-       (shrink-exp e))]))
+       (shrink-exp e))]
+    [(Lambda arg* rtype body)
+     (Lambda arg* rtype (shrink-exp body))]))
