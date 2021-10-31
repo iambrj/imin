@@ -14,6 +14,7 @@ lives at : https://github.com/iambrj/imin
          "constants.rkt"
          "shrink.rkt"
          "reveal-functions.rkt"
+         "convert-to-closures.rkt"
          "limit-functions.rkt"
          "expose-allocation.rkt"
          "uniquify.rkt"

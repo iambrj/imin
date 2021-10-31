@@ -3,7 +3,11 @@
 (require "utilities.rkt"
          "constants.rkt")
 
-(provide instr-w instr-r param-name atom? build-lets)
+(provide instr-w
+         instr-r
+         param-name
+         atom?
+         build-lets)
 
 ; XXX : hardocded to al, will have to change if other registers are used
 (define (instr-w instr)
